@@ -1,0 +1,135 @@
+================================================================================
+                              仓库与环境准备
+================================================================================
+【Git 仓库克隆】
+git clone git@github.com:nvidia-isaac/WBC-AGILE.git agile
+
+【VNC】
+/opt/TurboVNC/bin/vncserver -wm xfce -securitytypes none
+
+
+================================================================================
+                              训练
+================================================================================
+【基础】
+python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless --logger wandb
+
+【多 GPU (DDP)】
+python -m torch.distributed.run --standalone --nproc-per-node=2 scripts/train.py \
+  --task Velocity-T1-v0 --num_envs 4096 --headless --distributed
+
+【断点重训】
+python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless \
+  --resume True --load_run "2026-01-15_.*" --checkpoint "model_5000.pt"
+
+【Hydra 覆盖】
+python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless \
+  env.rewards.track_lin_vel_xy_exp.weight=2.0 \
+  agent.algorithm.learning_rate=5e-4
+
+【TensorBoard】
+python -m tensorboard.main --logdir=logs/rsl_rl/<exp_name>
+
+
+================================================================================
+                              教师-学生蒸馏（Velocity-Height-G1）
+================================================================================
+python scripts/train.py --task Velocity-Height-G1-v0 --num_envs 4096 --headless --logger wandb
+
+python scripts/export_policy.py --task Velocity-Height-G1-v0 \
+  --checkpoint logs/rsl_rl/velocity_height_g1/<run>/model_30000.pt --headless
+
+python scripts/train.py --task Velocity-Height-G1-Distillation-Recurrent-v0 \
+  --num_envs 4096 --headless --logger wandb
+
+python scripts/eval.py --task Velocity-Height-G1-Distillation-Recurrent-v0 \
+  --num_envs 32 --checkpoint <path> \
+  --run_evaluation --save_trajectories --generate_report
+
+python scripts/export_policy.py --task Velocity-Height-G1-Distillation-Recurrent-v0 \
+  --checkpoint <path> --headless
+
+
+================================================================================
+                              StandUp
+================================================================================
+python scripts/train.py --task StandUp-T1-v0 --num_envs 4096 --headless --logger wandb
+python scripts/play.py  --task StandUp-T1-v0 --num_envs 16 --validate-fallen-states
+
+
+================================================================================
+                              Tracking 动作模仿
+================================================================================
+python scripts/utils/convert_retargeted_data_for_tracking.py \
+  --input <amass.npz> --output agile/rl_env/assets/motion_data/<motion>.npz
+
+python scripts/train.py --task Tracking-Flat-G1-v0 --num_envs 4096 --headless --logger wandb
+
+
+================================================================================
+                              Play
+================================================================================
+python scripts/play.py --task Velocity-T1-v0 --num_envs 2
+python scripts/play.py --task Velocity-T1-v0 --num_envs 1 --real-time
+python scripts/play.py --task Velocity-T1-v0 --num_envs 2 --video --video_length 400
+python scripts/play.py --task Debug-G1-v0 --num_envs 2
+python scripts/play.py --task Debug-G1-Object-v0
+
+
+================================================================================
+                              评估 (Isaac Lab)
+================================================================================
+python scripts/eval.py --task Velocity-T1-v0 --num_envs 32 \
+  --checkpoint <path> --run_evaluation --save_trajectories --generate_report
+
+python scripts/eval.py --task Velocity-Height-G1-v0 --num_envs 16 \
+  --checkpoint <path> --run_evaluation \
+  --eval_config agile/algorithms/evaluation/configs/examples/x_velocity_sweep.yaml
+
+python agile/algorithms/evaluation/generate_report.py \
+  --log_dir logs/evaluation/<task>_<datetime> --episodes failed
+
+
+================================================================================
+                              Sim2MuJoCo
+================================================================================
+python scripts/eval.py --task Velocity-G1-History-v0 --checkpoint <path>
+python scripts/export_IODescriptors.py --task Velocity-G1-History-v0 --output_dir ./io_descriptors
+
+git clone https://github.com/unitreerobotics/unitree_mujoco.git
+
+python scripts/sim2mujoco_eval.py --checkpoint <policy.pt> --config <config.yaml> \
+  --mjcf <scene.xml> --duration 30.0
+
+python scripts/sim2mujoco_eval.py --checkpoint <policy.pt> --config <config.yaml> \
+  --mjcf <scene.xml> --eval-config agile/sim2mujoco/configs/x_velocity_sweep.yaml \
+  --save-data --no-viewer
+
+python scripts/sim2mujoco_eval.py --checkpoint <policy.pt> --config <config.yaml> \
+  --mjcf <scene.xml> --random-commands all --random-interval 2.0 --random-seed 42 \
+  --duration 50.0 --save-data --no-viewer
+
+# --pd-scale 0.3   --noise-scale 2.0
+
+
+================================================================================
+                              策略 / IO 导出
+================================================================================
+python scripts/export_policy.py --task Velocity-T1-v0 --checkpoint <model.pt> --headless
+python scripts/eval.py --task Velocity-T1-v0 --checkpoint <model.pt> --export_io
+python scripts/export_IODescriptors.py --task Velocity-T1-v0 --output_dir ./io_descriptors
+
+
+================================================================================
+                              W&B Sweep
+================================================================================
+python scripts/wandb_sweep/init_sweep.py --project_name my-sweep
+python scripts/wandb_sweep/run_sweep.py  --project_name my-sweep --agent_count 10
+
+
+================================================================================
+                              测试
+================================================================================
+pytest tests/
+pytest tests/ -k "velocity_t1"
+python scripts/verify_rsl_rl.py
