@@ -170,8 +170,11 @@ class LiftAction(ActionTerm):
         forces = torch.zeros_like(self._asset.data.root_lin_vel_b)
         # calculate the height error
         height_error = target_height - height  # (N,)
-        # apply the height error to the forces
-        forces[:, 2] = self.stiffness_forces * height_error
+        # PD：P 来自高度误差，D 来自 base 的 z 速度（抑制过冲，原本只算 P）
+        forces[:, 2] = (
+            self.stiffness_forces * height_error
+            - self.damping_forces * self._asset.data.root_lin_vel_w[:, 2]
+        )
         # Disable the lift assist for negative commanded heights: "lie flat" is a
         # joint-configuration task (the policy splays the legs), not a force-support
         # task, and the assist should neither pull the robot up nor push it into the ground.

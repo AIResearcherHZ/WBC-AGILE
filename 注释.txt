@@ -56,6 +56,10 @@ python scripts/export_policy.py --task Velocity-Height-G1-Distillation-Recurrent
 python scripts/train.py --task StandUp-T1-v0 --num_envs 4096 --headless --logger wandb
 python scripts/play.py  --task StandUp-T1-v0 --num_envs 16 --validate-fallen-states
 
+python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4 --headless
+python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4096 --headless --logger wandb
+python scripts/play.py  --task StandUp-Semi-Taks-T1-v0 --num_envs 16
+
 
 ================================================================================
                               Tracking 动作模仿
