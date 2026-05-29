@@ -67,6 +67,11 @@ from isaaclab.utils.dict import print_dict  # noqa: E402
 from isaaclab.terrains import TerrainImporterCfg  # noqa: E402
 import isaaclab.sim as sim_utils  # noqa: E402
 
+# Apply repo monkey-patches (same as train/eval/record). Includes the viewport camera
+# controller fix that stops the "weakly-referenced object no longer exists" traceback flood
+# from the asset-tracking camera during teardown/reset.
+import agile.isaaclab_extras.monkey_patches  # noqa: F401, E402
+
 # Ensure task modules are imported/registered
 import agile.rl_env.tasks  # noqa: F401, E402
 import isaaclab_tasks  # noqa: F401, E402

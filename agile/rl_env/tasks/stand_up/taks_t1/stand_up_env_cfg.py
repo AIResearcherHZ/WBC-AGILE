@@ -20,7 +20,6 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from agile.rl_env import mdp
 from agile.rl_env.assets.robots import taks as taks_t1
 from agile.rl_env.mdp.terrains import STAND_UP_ROUGH_TERRAIN_CFG  # noqa: F401
-from agile.rl_env.termination_cfg import DoneTermCfg as DoneTermEx
 
 FILE_DIR = pathlib.Path(__file__).parent
 REPO_DIR = FILE_DIR.parent.parent.parent
@@ -152,16 +151,29 @@ class ActionsCfg:
 
     lift = mdp.LiftActionCfg(
         asset_name="robot",
+        # 吊带作用在 torso_link（在 base 之上、靠近上身）：base 自然垂在其下方 → 像被
+        # 拎着的木偶一样稳定竖直（若作用在 base 上，上身成倒立摆会翻成头朝下）。
         link_to_lift="torso_link",
-        stiffness_forces=5000.0,
+        # 高度 PD 调温和：力上限≈1.3×体重(153N)、降低刚度，避免把它顶过冲后弹起。
+        stiffness_forces=3000.0,
         damping_forces=500.0,
-        force_limit=300.0,
-        damping_torques=100.0,
+        force_limit=200.0,
+        # 朝向扶正：把 base 的 z 轴 PD 扶到竖直（roll/pitch），并阻尼 yaw 防自旋。
+        # 力作用在 torso（上方）→ base 垂在其下不会翻；扶正力矩作用在 base（righting_link）
+        # → 直接把测量/奖励所用的 base 朝向扶竖直。这是无腿机器人真正“站直”的关键。
+        # 关键：力矩作用在很轻的 base_link（Imin≈0.0078），显式积分下无过冲阻尼上限 c≈I/dt：
+        # roll/pitch≈1.5、yaw≈2.9。之前 50/100 远超 → 每步反超速度、注入能量 → 狂抖飞。
+        # 这里用“deadbeat”阻尼（最大不过冲），刚度适度（P 项 k<1250 安全），兼顾扶正力与不震荡。
+        stiffness_torques=250.0,
+        orientation_damping=1.5,
+        righting_link="base_link",
+        damping_torques=2.5,
         torque_limit=250.0,
         height_sensor="height_measurement_sensor",
         target_height=taks_t1.DEFAULT_TRUNK_HEIGHT,
-        start_lifting_time_s=3.0,
-        lifting_duration_s=10.0,
+        # 跌倒姿态已由 reset 数据集给定，无需等待下落；尽快起吊并快速扶正。
+        start_lifting_time_s=0.5,
+        lifting_duration_s=3.0,
     )
 
 
@@ -271,10 +283,16 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")},
     )
 
-    no_height_progress_termination = RewTerm(
-        func=mdp.is_terminated_term,
-        weight=-5.0,
-        params={"term_keys": "no_height_progress"},
+    # SUCCESS 信号：回合超时（走完整段）时仍保持在站立高度则给奖励，
+    # 鼓励"站起来并稳住整段 15s"，而不是只在某一帧达到高度。
+    standing_at_timeout = RewTerm(
+        func=mdp.standing_at_timeout,
+        weight=5.0,
+        params={
+            "min_height": taks_t1.DEFAULT_TRUNK_HEIGHT * 0.8,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
+        },
     )
 
 
@@ -283,15 +301,18 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    no_height_progress = DoneTermEx(
-        func=mdp.no_height_progress,
-        termination_type="bad",
-        sigma=1.0,
+    # 防飞/防爆护栏：被吊带弹飞过高、速度爆炸或出现 NaN 时立即结束该回合，
+    # 避免飞行状态污染整批训练数据。target≈0.45m，正常过冲也远低于 1.2m。
+    # 注：移除了原 no_height_progress —— 它对 10% 站立初始化的环境几乎必然触发
+    # （初始就 0.45，要求再升 +0.2=0.65 不可能），且 sigma 罚 + 奖励项 -5/-100 双重惩罚，
+    # 考的是吊带抬没抬而非策略学没学会；吊带已是永久托举，无需该项。
+    invalid_state = DoneTerm(
+        func=mdp.invalid_state,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
-            "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
-            "height_increase_threshold": 0.2,
-            "time_limit_s": 10.0,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "max_root_height": 1.2,
+            "max_lin_vel": 10.0,
+            "max_ang_vel": 40.0,
         },
     )
 
@@ -435,16 +456,8 @@ class EventCfg:
 
 @configclass
 class CurriculumCfg:
-    adaptive_lift = CurrTerm(
-        func=mdp.adaptive_force_decay,
-        params={
-            "action_name": "lift",
-            "standing_height_threshold": taks_t1.DEFAULT_TRUNK_HEIGHT - 0.1,
-            "threshold": 0.7,
-            "ema_alpha": 0.01,
-            "disable_threshold": 0.01,
-        },
-    )
+    # 注：移除了 adaptive_lift（adaptive_force_decay）—— 它会在站立率达标后把吊带力
+    # 单调衰减到 0 且永不恢复，但无腿机器人一旦撤力必塌。此处吊带为永久虚拟支撑。
 
     increase_action_rate_regularization = CurrTerm(
         func=mdp.update_reward_weight_step,
@@ -453,17 +466,6 @@ class CurriculumCfg:
             "start_step": 25_000 * from_scratch,
             "num_steps": 50_000 * with_curriculum,
             "terminal_weight": -0.1,
-            "use_log_space": True,
-        },
-    )
-
-    increase_no_progress_penalty = CurrTerm(
-        func=mdp.update_reward_weight_step,
-        params={
-            "reward_name": "no_height_progress_termination",
-            "start_step": 60_000 * from_scratch,
-            "num_steps": 60_000 * with_curriculum,
-            "terminal_weight": -100,
             "use_log_space": True,
         },
     )

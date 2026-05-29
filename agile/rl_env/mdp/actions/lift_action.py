@@ -59,6 +59,10 @@ class LiftAction(ActionTerm):
         self._force_limit = cfg.force_limit
         self.damping_torques = cfg.damping_torques
         self._torque_limit = cfg.torque_limit
+        # Roll/pitch "righting" PD (toward upright). Disabled when stiffness_torques == 0.
+        self.stiffness_torques = cfg.stiffness_torques
+        self.orientation_damping = cfg.orientation_damping
+        self._world_up = torch.tensor([0.0, 0.0, 1.0], device=env.device)
         # height sensor
         self._height_sensor: RayCaster = env.scene.sensors[cfg.height_sensor]
 
@@ -70,6 +74,14 @@ class LiftAction(ActionTerm):
         # Store base force limit for curriculum scaling
         self._base_force_limit = self._force_limit
         self._lift_link_id, _ = self._asset.find_bodies(cfg.link_to_lift)
+        # Link the righting torque acts on (defaults to the lifted link; must be resolved AFTER
+        # _lift_link_id exists). Applying the lift force at a high link while righting a lower
+        # link (the base) lets a legless body hang upright instead of toppling like an inverted
+        # pendulum.
+        if cfg.righting_link is not None:
+            self._righting_link_id, _ = self._asset.find_bodies(cfg.righting_link)
+        else:
+            self._righting_link_id = self._lift_link_id
         self._is_disabled = False
 
         # Force application offset in body frame
@@ -126,6 +138,8 @@ class LiftAction(ActionTerm):
         self.damping_forces = self.cfg.damping_forces * self._force_scale
         self._force_limit = self._base_force_limit * self._force_scale
         self.damping_torques = self.cfg.damping_torques * self._force_scale
+        self.stiffness_torques = self.cfg.stiffness_torques * self._force_scale
+        self.orientation_damping = self.cfg.orientation_damping * self._force_scale
         self._torque_limit = self.cfg.torque_limit * self._force_scale
         self._is_disabled = self._force_scale <= 0
 
@@ -186,27 +200,52 @@ class LiftAction(ActionTerm):
         else:
             forces = torch.clamp(forces, 0.0, self._force_limit).unsqueeze(1)
 
-        # Angular velocity damping (D term) - only on z-axis (yaw) in world frame
-        # This prevents fast spinning while allowing roll/pitch for balance
+        # Angular torque (world frame), acting on the righting link:
+        #   - roll/pitch: optional PD "righting" toward upright (only if stiffness_torques > 0)
+        #   - yaw:        velocity damping to prevent spinning (original behavior)
         torques_w = torch.zeros_like(self._asset.data.root_ang_vel_w)
+        ang_vel_w = self._asset.data.root_ang_vel_w
+
+        if self.stiffness_torques > 0:
+            # Righting: rotate the righting link's local z-axis back to world up.
+            # cross(up_w, z_hat) = (up_y, -up_x, 0) -> a purely horizontal axis (z-component 0),
+            # so this drives roll/pitch toward upright while leaving yaw untouched.
+            n_envs = self._asset.data.root_quat_w.shape[0]
+            z_hat = self._world_up.expand(n_envs, 3)
+            right_quat = self._asset.data.body_quat_w[:, self._righting_link_id].squeeze(1)
+            up_w = math_utils.quat_apply(right_quat, z_hat)
+            righting_axis_w = torch.cross(up_w, z_hat, dim=-1)
+            torques_w[:, :2] = (
+                self.stiffness_torques * righting_axis_w[:, :2] - self.orientation_damping * ang_vel_w[:, :2]
+            )
+
         if self.damping_torques > 0:
-            # Get angular velocity in world frame and damp only z-component
-            ang_vel_z = self._asset.data.root_ang_vel_w[:, 2]
-            torques_w[:, 2] = -self.damping_torques * ang_vel_z
-            # Clamp torques
-            torques_w[:, 2] = torch.clamp(torques_w[:, 2], -self._torque_limit, self._torque_limit)
+            # Damp only the z-component (yaw); allows roll/pitch when righting is disabled.
+            torques_w[:, 2] = -self.damping_torques * ang_vel_w[:, 2]
 
-        # rotate forces and torques to body frame
-        link_quat = self._asset.data.body_quat_w[:, self._lift_link_id].squeeze(1)
-        forces_b = math_utils.quat_apply_inverse(link_quat, forces)
-        torques_b = math_utils.quat_apply_inverse(link_quat, torques_w.unsqueeze(1))
+        # Clamp each component to the torque limit
+        torques_w = torch.clamp(torques_w, -self._torque_limit, self._torque_limit)
 
-        # Compute positions for force application (offset from body origin in local frame)
-        positions = self._force_offset.unsqueeze(0).unsqueeze(0).expand(forces_b.shape[0], 1, 3)
-
-        self._asset.permanent_wrench_composer.set_forces_and_torques(
-            forces=forces_b, torques=torques_b, positions=positions, body_ids=self._lift_link_id
-        )
+        composer = self._asset.permanent_wrench_composer
+        if self._righting_link_id == self._lift_link_id:
+            # Single body: lift force + torque on the same (lifted) link, in its local frame.
+            link_quat = self._asset.data.body_quat_w[:, self._lift_link_id].squeeze(1)
+            forces_b = math_utils.quat_apply_inverse(link_quat, forces)
+            torques_b = math_utils.quat_apply_inverse(link_quat, torques_w.unsqueeze(1))
+            positions = self._force_offset.unsqueeze(0).unsqueeze(0).expand(forces_b.shape[0], 1, 3)
+            composer.set_forces_and_torques(
+                forces=forces_b, torques=torques_b, positions=positions, body_ids=self._lift_link_id
+            )
+        else:
+            # Two bodies (global frame): lift force on the lifted link, righting torque on the
+            # righting link. Applied in one call so the composer sums them this step.
+            n_envs = forces.shape[0]
+            body_ids = list(self._lift_link_id) + list(self._righting_link_id)
+            forces_g = torch.zeros(n_envs, 2, 3, device=self.device)
+            forces_g[:, 0, :] = forces.squeeze(1)
+            torques_g = torch.zeros(n_envs, 2, 3, device=self.device)
+            torques_g[:, 1, :] = torques_w
+            composer.set_forces_and_torques(forces=forces_g, torques=torques_g, body_ids=body_ids, is_global=True)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         # Reset max heights for environments that are resetting

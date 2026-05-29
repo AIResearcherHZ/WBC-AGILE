@@ -167,6 +167,19 @@ class LiftActionCfg(ActionTermCfg):
     E.g., 0.9 means the lift can apply up to 90% of the robot's weight. Defaults to None."""
     damping_torques: float = 0.0
     """The damping for angular velocity (D term). Applies torques opposing yaw rotation. Defaults to 0.0."""
+    stiffness_torques: float = 0.0
+    """Roll/pitch "righting" stiffness (P gain) that torques the lifted link toward upright
+    (its z-axis aligned with world up). 0.0 (default) disables righting, so the link is only
+    lifted in height and yaw-damped -- the original behavior. Set > 0 for legless/half-body
+    robots that cannot self-right and must be held upright by the harness."""
+    orientation_damping: float = 0.0
+    """Roll/pitch angular-velocity damping (D term) paired with :attr:`stiffness_torques`.
+    Only used when ``stiffness_torques > 0``. Defaults to 0.0."""
+    righting_link: str | None = None
+    """Link whose orientation the righting torque acts on. Defaults to None (= the lifted
+    link). For a legless robot, set this to the base/pelvis while ``link_to_lift`` stays at a
+    higher link (e.g. the torso): the body then hangs from the lift point so it cannot invert,
+    while the base is torqued upright. Only used when ``stiffness_torques > 0``."""
     torque_limit: float = 0.0
     """The maximum torque for angular damping. Defaults to 0.0."""
     height_sensor: str = "height_measurement_sensor"

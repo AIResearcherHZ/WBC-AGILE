@@ -17,3 +17,4 @@ from .contact_sensor_data_patch import *  # noqa: F403
 from .contact_sensor_patch import *  # noqa: F403
 from .manager_based_rl_env_patch import *  # noqa: F403
 from .observation_manager_patch import *  # noqa: F403
+from .viewport_camera_controller_patch import *  # noqa: F403

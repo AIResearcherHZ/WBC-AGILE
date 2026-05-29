@@ -21,7 +21,9 @@ HEAD_JOINT_NAMES = NECK_JOINT_NAMES
 LEG_JOINT_NAMES: list[str] = []
 FEET_LINK_NAMES: list[str] = []
 
-DEFAULT_TRUNK_HEIGHT = 0.65
+# 无腿机器人：base_link 是最底链节，静止离地 ~0.07m。吊带把 base 托到该高度并扶正朝向。
+# 实测把 base 拉到 0.45/0.65 只会整机悬空+躯干瘫倒；0.2m=略离地、靠扶正力矩保持竖直。
+DEFAULT_TRUNK_HEIGHT = 0.2
 
 UNDESIRED_CONTACTS_LINKS = [
     "base_link", "torso_link", "waist_.*_link",
@@ -55,12 +57,7 @@ SEMI_TAKS_T1_CFG = ArticulationCfg(
     articulation_root_prim_path="/base_link",
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, DEFAULT_TRUNK_HEIGHT),
-        joint_pos={
-            ".*_shoulder_pitch_joint": 0.16,
-            ".*_elbow_joint": 1.10,
-            "waist_.*": 0.0,
-            "neck_.*": 0.0,
-        },
+        joint_pos={".*": 0.0},
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.99,
@@ -131,14 +128,7 @@ SEMI_TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
     articulation_root_prim_path="/base_link",
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, DEFAULT_TRUNK_HEIGHT),
-        joint_pos={
-            ".*_shoulder_pitch_joint": 0.16,
-            "left_shoulder_roll_joint": 0.20,
-            "right_shoulder_roll_joint": -0.20,
-            ".*_elbow_joint": 1.10,
-            "waist_.*": 0.0,
-            "neck_.*": 0.0,
-        },
+        joint_pos={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
