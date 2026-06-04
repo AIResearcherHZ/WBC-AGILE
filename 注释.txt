@@ -74,26 +74,26 @@ tensorboard \
   --port 6006
 
 # 单卡训练
-python scripts/train.py --task Velocity-T1-v0 --num_envs 10000 --headless
+python scripts/train.py --task Velocity-T1-v0 --num_envs 8192 --headless
 
 # 单节点多GPU训练（DDP）
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task Velocity-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task Velocity-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 ./run_train.sh velo_t1 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task Velocity-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 # 查看实时输出: tmux attach -t velo_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t velo_t1
@@ -107,27 +107,27 @@ tensorboard \
 # 单卡训练 — StandUp
 python scripts/train.py \
   --task StandUp-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless
 
 # 单节点多GPU训练（DDP）— StandUp
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task StandUp-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 ./run_train.sh standup_t1 python -m torch.distributed.run \
   --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-T1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 # 查看实时输出: tmux attach -t standup_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_t1
@@ -198,7 +198,7 @@ tensorboard \
 export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task Velocity-Height-G1-v0 \
-  --num_envs 10000 \
+  --num_envs 8192 \
   --headless \
   --distributed
 

@@ -583,7 +583,7 @@ class TaksT1StandUpEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
         self.scene.contact_forces.update_period = self.sim.dt
 
-        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        self.sim.physx.gpu_max_rigid_patch_count = 40 * 2**15
 
         if self.scene.height_measurement_sensor is not None:
             self.scene.height_measurement_sensor.update_period = self.sim.dt
