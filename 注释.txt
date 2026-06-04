@@ -195,9 +195,10 @@ tensorboard \
   --port 6006
 
 # 单节点多GPU训练（DDP）
+export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task Velocity-Height-G1-v0 \
-  --num_envs 4096 \
+  --num_envs 10000 \
   --headless \
   --distributed
 
