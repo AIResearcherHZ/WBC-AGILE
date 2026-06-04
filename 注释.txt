@@ -9,6 +9,39 @@ git clone git@github.com:nvidia-isaac/WBC-AGILE.git agile
 
 
 ================================================================================
+                    环境:agile 包 + rsl_rl 版本隔离(先看!)
+================================================================================
+# 背景:本仓库与 /root/atom01_train 共用同一个 conda 环境 isaaclab,两者都依赖导入名
+#       rsl_rl(发行名 rsl-rl-lib)但版本不同,一个环境只能装一份:
+#         - WBC-AGILE 需自带定制版 v2.3.3(agile/algorithms/rsl_rl,含 L2C2/对称性/
+#           熵退火/师生蒸馏,被 StandUp 等任务配置直接用到)
+#         - atom01_train 用全局安装的 v3.3.0(/root/atom01_train/rsl_rl)
+#       下面所有“裸跑 python scripts/train.py”的命令,都必须先让 rsl_rl 指向自带版,
+#       否则会用到环境里的 v3.3.0,与本仓库配置不兼容。
+
+【一次性:安装 agile 包(已装好,重装/换机时才需要)】
+# 否则 python scripts/train.py 会报 No module named 'agile'
+cd /root/WBC-AGILE && pip install --no-deps -e .
+
+【方式 A — 本终端 export 一次,之后裸跑都生效(推荐,最省心)】
+export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+
+【方式 B — 行内前缀(只对这一条命令生效)】
+PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl \
+  python scripts/train.py --task StandUp-Taks-T1-v0 --num_envs 4096 --headless
+
+【方式 C — 用 run_train.sh(已内置 PYTHONPATH 注入,无需手动 export)】
+./run_train.sh standup_t1 python -m torch.distributed.run --standalone \
+  --nproc-per-node=4 scripts/train.py --task StandUp-Taks-T1-v0 \
+  --num_envs 4096 --headless --distributed
+
+【验证当前终端用的是哪份 rsl_rl】
+python -c "import rsl_rl; print(rsl_rl.__file__)"
+# 期望: /root/WBC-AGILE/agile/algorithms/rsl_rl/rsl_rl/__init__.py
+# 若显示 /root/atom01_train/... 说明没设对,回到方式 A 或 B。
+
+
+================================================================================
                               本体:T1
 ================================================================================
 【训练 — 速度跟踪】
