@@ -1,5 +1,5 @@
 ================================================================================
-                              仓库与环境准备
+                              通用:环境准备
 ================================================================================
 【Git 仓库克隆】
 git clone git@github.com:nvidia-isaac/WBC-AGILE.git agile
@@ -9,33 +9,104 @@ git clone git@github.com:nvidia-isaac/WBC-AGILE.git agile
 
 
 ================================================================================
-                              训练
+                              本体:T1
 ================================================================================
-【基础】
+【训练 — 速度跟踪】
 python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless --logger wandb
 
-【多 GPU (DDP)】
-python -m torch.distributed.run --standalone --nproc-per-node=2 scripts/train.py \
-  --task Velocity-T1-v0 --num_envs 4096 --headless --distributed
+【训练 — 站起 StandUp】
+python scripts/train.py --task StandUp-T1-v0 --num_envs 4096 --headless --logger wandb
 
-【断点重训】
-python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless \
-  --resume True --load_run "2026-01-15_.*" --checkpoint "model_5000.pt"
+【Play】
+python scripts/play.py --task Velocity-T1-v0 --num_envs 2
+python scripts/play.py --task Velocity-T1-v0 --num_envs 1 --real-time
+python scripts/play.py --task Velocity-T1-v0 --num_envs 2 --video --video_length 400
+python scripts/play.py --task StandUp-T1-v0  --num_envs 16 --validate-fallen-states
+python scripts/play.py --task Debug-T1-v0    --num_envs 2
 
-【Hydra 覆盖】
-python scripts/train.py --task Velocity-T1-v0 --num_envs 4096 --headless \
-  env.rewards.track_lin_vel_xy_exp.weight=2.0 \
-  agent.algorithm.learning_rate=5e-4
+【评估】
+python scripts/eval.py --task Velocity-T1-v0 --num_envs 32 \
+  --checkpoint <path> --run_evaluation --save_trajectories --generate_report
 
-【TensorBoard】
-python -m tensorboard.main --logdir=logs/rsl_rl/<exp_name>
+【策略 / IO 导出】
+python scripts/export_policy.py --task Velocity-T1-v0 --checkpoint <model.pt> --headless
+python scripts/eval.py --task Velocity-T1-v0 --checkpoint <model.pt> --export_io
+python scripts/export_IODescriptors.py --task Velocity-T1-v0 --output_dir ./io_descriptors
+
+【多卡 / 后台 / TensorBoard】
+# TensorBoard训练曲线
+tensorboard \
+  --logdir logs/rsl_rl/velocity_t1_lower \
+  --host 0.0.0.0 \
+  --port 6006
+
+# 单卡训练
+python scripts/train.py --task Velocity-T1-v0 --num_envs 10000 --headless
+
+# 单节点多GPU训练（DDP）
+python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
+  --task Velocity-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task Velocity-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+
+./run_train.sh velo_t1 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task Velocity-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+# 查看实时输出: tmux attach -t velo_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t velo_t1
+
+# TensorBoard训练曲线 — StandUp
+tensorboard \
+  --logdir logs/rsl_rl/stand_up_t1 \
+  --host 0.0.0.0 \
+  --port 6006
+
+# 单卡训练 — StandUp
+python scripts/train.py \
+  --task StandUp-T1-v0 \
+  --num_envs 10000 \
+  --headless
+
+# 单节点多GPU训练（DDP）— StandUp
+python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
+  --task StandUp-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task StandUp-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+
+./run_train.sh standup_t1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=4 scripts/train.py \
+  --task StandUp-T1-v0 \
+  --num_envs 10000 \
+  --headless \
+  --distributed
+# 查看实时输出: tmux attach -t standup_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_t1
 
 
 ================================================================================
-                              教师-学生蒸馏（Velocity-Height-G1）
+                              本体:G1
 ================================================================================
+【训练 — 速度+高度(教师)】
 python scripts/train.py --task Velocity-Height-G1-v0 --num_envs 4096 --headless --logger wandb
 
+【教师-学生蒸馏】
 python scripts/export_policy.py --task Velocity-Height-G1-v0 \
   --checkpoint logs/rsl_rl/velocity_height_g1/<run>/model_30000.pt --headless
 
@@ -49,54 +120,23 @@ python scripts/eval.py --task Velocity-Height-G1-Distillation-Recurrent-v0 \
 python scripts/export_policy.py --task Velocity-Height-G1-Distillation-Recurrent-v0 \
   --checkpoint <path> --headless
 
-
-================================================================================
-                              StandUp
-================================================================================
-python scripts/train.py --task StandUp-T1-v0 --num_envs 4096 --headless --logger wandb
-python scripts/play.py  --task StandUp-T1-v0 --num_envs 16 --validate-fallen-states
-
-python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4 --headless
-python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4096 --headless --logger wandb
-python scripts/play.py  --task StandUp-Semi-Taks-T1-v0 --num_envs 16
-
-
-================================================================================
-                              Tracking 动作模仿
-================================================================================
+【训练 — 动作模仿 Tracking】
 python scripts/utils/convert_retargeted_data_for_tracking.py \
   --input <amass.npz> --output agile/rl_env/assets/motion_data/<motion>.npz
-
 python scripts/train.py --task Tracking-Flat-G1-v0 --num_envs 4096 --headless --logger wandb
 
-
-================================================================================
-                              Play
-================================================================================
-python scripts/play.py --task Velocity-T1-v0 --num_envs 2
-python scripts/play.py --task Velocity-T1-v0 --num_envs 1 --real-time
-python scripts/play.py --task Velocity-T1-v0 --num_envs 2 --video --video_length 400
+【Play】
 python scripts/play.py --task Debug-G1-v0 --num_envs 2
 python scripts/play.py --task Debug-G1-Object-v0
 
-
-================================================================================
-                              评估 (Isaac Lab)
-================================================================================
-python scripts/eval.py --task Velocity-T1-v0 --num_envs 32 \
-  --checkpoint <path> --run_evaluation --save_trajectories --generate_report
-
+【评估】
 python scripts/eval.py --task Velocity-Height-G1-v0 --num_envs 16 \
   --checkpoint <path> --run_evaluation \
   --eval_config agile/algorithms/evaluation/configs/examples/x_velocity_sweep.yaml
-
 python agile/algorithms/evaluation/generate_report.py \
   --log_dir logs/evaluation/<task>_<datetime> --episodes failed
 
-
-================================================================================
-                              Sim2MuJoCo
-================================================================================
+【Sim2MuJoCo】
 python scripts/eval.py --task Velocity-G1-History-v0 --checkpoint <path>
 python scripts/export_IODescriptors.py --task Velocity-G1-History-v0 --output_dir ./io_descriptors
 
@@ -112,28 +152,121 @@ python scripts/sim2mujoco_eval.py --checkpoint <policy.pt> --config <config.yaml
 python scripts/sim2mujoco_eval.py --checkpoint <policy.pt> --config <config.yaml> \
   --mjcf <scene.xml> --random-commands all --random-interval 2.0 --random-seed 42 \
   --duration 50.0 --save-data --no-viewer
-
 # --pd-scale 0.3   --noise-scale 2.0
 
+【多卡 / 后台 / TensorBoard】
+# TensorBoard训练曲线
+tensorboard \
+  --logdir logs/rsl_rl/velocity_height_g1_lower \
+  --host 0.0.0.0 \
+  --port 6006
+
+# 单节点多GPU训练（DDP）
+python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
+  --task Velocity-Height-G1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task Velocity-Height-G1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+./run_train.sh velheight_g1 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task Velocity-Height-G1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+# 查看实时输出: tmux attach -t velheight_g1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t velheight_g1
+
 
 ================================================================================
-                              策略 / IO 导出
+                              本体:Taks-T1
 ================================================================================
-python scripts/export_policy.py --task Velocity-T1-v0 --checkpoint <model.pt> --headless
-python scripts/eval.py --task Velocity-T1-v0 --checkpoint <model.pt> --export_io
-python scripts/export_IODescriptors.py --task Velocity-T1-v0 --output_dir ./io_descriptors
+# 资产:agile/rl_env/assets/robots/taks/Taks_T1.usd
+# 说明:整机 Taks-T1 站立任务已注册为 StandUp-Taks-T1-v0(experiment_name=stand_up_taks_t1)。
+#       结构对标 Booster T1 站立:有腿、粗糙地形,吊带仅临时辅助并随训练逐步撤掉。另见下方无腿 Semi-Taks-T1。
+
+【多卡 / 后台 / TensorBoard】
+# TensorBoard训练曲线
+tensorboard \
+  --logdir logs/rsl_rl/stand_up_taks_t1 \
+  --host 0.0.0.0 \
+  --port 6006
+
+【单卡训练】
+python scripts/train.py \
+  --task StandUp-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless
+
+# 单节点多GPU训练（DDP）
+python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
+  --task StandUp-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task StandUp-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+./run_train.sh taks_t1 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task StandUp-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+# 查看实时输出: tmux attach -t taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t taks_t1
 
 
 ================================================================================
-                              W&B Sweep
+                              本体:Semi-Taks-T1(半身/无腿,吊带站起)
 ================================================================================
-python scripts/wandb_sweep/init_sweep.py --project_name my-sweep
-python scripts/wandb_sweep/run_sweep.py  --project_name my-sweep --agent_count 10
+# 资产:agile/rl_env/assets/robots/taks/Semi_Taks_T1.usd
 
+【冒烟测试(4 环境,带画面)】
+python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4 --headless
 
-================================================================================
-                              测试
-================================================================================
-pytest tests/
-pytest tests/ -k "velocity_t1"
-python scripts/verify_rsl_rl.py
+【正式训练】
+python scripts/train.py --task StandUp-Semi-Taks-T1-v0 --num_envs 4096 --headless --logger wandb
+# 后台跑(推荐):见“通用 → 后台训练”里的 getup_taks 例子
+
+【Play】
+python scripts/play.py --task StandUp-Semi-Taks-T1-v0 --num_envs 16
+
+【多卡 / 后台 / TensorBoard】
+# TensorBoard训练曲线
+tensorboard \
+  --logdir logs/rsl_rl/stand_up_semi_taks_t1 \
+  --host 0.0.0.0 \
+  --port 6006
+
+# 单节点多GPU训练（DDP）
+python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
+  --task StandUp-Semi-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task StandUp-Semi-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+
+./run_train.sh getup_taks CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=2 scripts/train.py \
+  --task StandUp-Semi-Taks-T1-v0 \
+  --num_envs 4096 \
+  --headless \
+  --distributed
+# 查看实时输出: tmux attach -t getup_taks  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t getup_taks

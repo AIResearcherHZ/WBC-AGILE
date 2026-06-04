@@ -1,13 +1,3 @@
-"""全身 Taks_T1 站立任务（StandUp-Taks-T1-v0）。
-
-结构对标 Booster T1 站立任务（agile/rl_env/tasks/stand_up/t1/stand_up_env_cfg.py）：
-有腿、能自己撑起，吊带只是“临时辅助”并由 adaptive_force_decay 课程逐步撤掉，
-粗糙地形 + terrain_levels 课程。机器人 / 关节 / 链节命名按 Taks_T1 替换：
-  Trunk → pelvis（浮动基座/根）、H2(吊带) → torso_link（脖子太弱，吊躯干）、
-  Waist(脚朝向参考) → torso_link、*foot_link* → *_ankle_roll_link、
-  *hand_link* → *_wrist_*_link、*Ankle* → *_ankle_*_joint。
-"""
-
 import pathlib
 
 import isaaclab.sim as sim_utils
@@ -30,7 +20,6 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from agile.rl_env import mdp
 from agile.rl_env.assets.robots import taks as taks_t1
 from agile.rl_env.mdp.terrains import STAND_UP_ROUGH_TERRAIN_CFG  # noqa: F401
-from agile.rl_env.termination_cfg import DoneTermCfg as DoneTermEx
 
 FILE_DIR = pathlib.Path(__file__).parent
 REPO_DIR = FILE_DIR.parent.parent.parent
@@ -41,13 +30,11 @@ with_curriculum = 1.0
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
-    """有腿机器人，使用粗糙地形（对标 Booster T1）。"""
-
-    # ground terrain
+    # 半身机器人无脚，平地即可
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="generator",
-        terrain_generator=STAND_UP_ROUGH_TERRAIN_CFG,
+        terrain_type="plane",
+        terrain_generator=None,
         max_init_terrain_level=0,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
@@ -55,7 +42,7 @@ class SceneCfg(InteractiveSceneCfg):
             restitution_combine_mode="multiply",
             static_friction=1.0,
             dynamic_friction=1.0,
-            restitution=1.0,
+            restitution=0.0,
         ),
         visual_material=sim_utils.MdlFileCfg(
             mdl_path=(
@@ -68,17 +55,14 @@ class SceneCfg(InteractiveSceneCfg):
         debug_vis=False,
     )
 
-    # robots：全身 Taks_T1（隐式执行器配置，含腿）
-    robot = taks_t1.TAKS_T1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot = taks_t1.SEMI_TAKS_T1_DELAYED_DC_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # sensors
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",
         history_length=3,
         track_air_time=True,
     )
 
-    # lights
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
@@ -87,9 +71,9 @@ class SceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # 高度传感器挂在浮动根 pelvis 上
+    # 高度传感器挂在浮动根 base_link 上
     height_measurement_sensor = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/pelvis",
+        prim_path="{ENV_REGEX_NS}/Robot/base_link",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.05, size=(0.0, 0.0)),
@@ -101,7 +85,7 @@ class SceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    """无指令。"""
+    pass
 
 
 @configclass
@@ -167,20 +151,29 @@ class ActionsCfg:
 
     lift = mdp.LiftActionCfg(
         asset_name="robot",
-        # Taks 脖子执行器极弱（3Nm），吊头会把头拽脱位 → 吊在 torso_link（经 97Nm 腰关节连到
-        # 骨盆，靠近竖直轴）。LiftAction 测的是“根(pelvis)高度”，吊点只决定施力位置。
+        # 吊带作用在 torso_link（在 base 之上、靠近上身）：base 自然垂在其下方 → 像被
+        # 拎着的木偶一样稳定竖直（若作用在 base 上，上身成倒立摆会翻成头朝下）。
         link_to_lift="torso_link",
-        stiffness_forces=5000.0,
+        # 高度 PD 调温和：力上限≈1.3×体重(153N)、降低刚度，避免把它顶过冲后弹起。
+        stiffness_forces=3000.0,
         damping_forces=500.0,
-        force_limit=300.0,  # ≈1.2×体重(254N)
-        damping_torques=100.0,  # 仅阻尼 yaw，防自旋
+        force_limit=200.0,
+        # 朝向扶正：把 base 的 z 轴 PD 扶到竖直（roll/pitch），并阻尼 yaw 防自旋。
+        # 力作用在 torso（上方）→ base 垂在其下不会翻；扶正力矩作用在 base（righting_link）
+        # → 直接把测量/奖励所用的 base 朝向扶竖直。这是无腿机器人真正“站直”的关键。
+        # 关键：力矩作用在很轻的 base_link（Imin≈0.0078），显式积分下无过冲阻尼上限 c≈I/dt：
+        # roll/pitch≈1.5、yaw≈2.9。之前 50/100 远超 → 每步反超速度、注入能量 → 狂抖飞。
+        # 这里用“deadbeat”阻尼（最大不过冲），刚度适度（P 项 k<1250 安全），兼顾扶正力与不震荡。
+        stiffness_torques=250.0,
+        orientation_damping=1.5,
+        righting_link="base_link",
+        damping_torques=2.5,
         torque_limit=250.0,
         height_sensor="height_measurement_sensor",
-        target_height=taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT,
-        # 有腿机器人靠腿+策略自己扶正，不开吊带扶正力矩（stiffness_torques=0，默认）；
-        # 吊带由 adaptive_lift 课程随站立率逐步撤掉。
-        start_lifting_time_s=3.0,
-        lifting_duration_s=10.0,
+        target_height=taks_t1.DEFAULT_TRUNK_HEIGHT,
+        # 跌倒姿态已由 reset 数据集给定，无需等待下落；尽快起吊并快速扶正。
+        start_lifting_time_s=0.5,
+        lifting_duration_s=3.0,
     )
 
 
@@ -194,12 +187,12 @@ class RewardsCfg:
     joint_vel_limits = RewTerm(func=mdp.joint_vel_limits, weight=-0.01, params={"soft_ratio": 0.8})
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
 
-    # 任务：从粗到细的高度跟踪（测 pelvis 根高度）
+    # 任务：从粗到细的高度跟踪
     base_height_rough = RewTerm(
         func=mdp.base_height_exp,
         weight=2.0,
         params={
-            "target_height": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT,
+            "target_height": taks_t1.DEFAULT_TRUNK_HEIGHT,
             "std": 0.5,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
         },
@@ -208,7 +201,7 @@ class RewardsCfg:
         func=mdp.base_height_exp,
         weight=8.0,
         params={
-            "target_height": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT,
+            "target_height": taks_t1.DEFAULT_TRUNK_HEIGHT,
             "std": 0.25,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
         },
@@ -217,7 +210,7 @@ class RewardsCfg:
         func=mdp.base_height_exp,
         weight=16.0,
         params={
-            "target_height": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT,
+            "target_height": taks_t1.DEFAULT_TRUNK_HEIGHT,
             "std": 0.1,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
         },
@@ -228,13 +221,13 @@ class RewardsCfg:
         weight=-0.05,
         params={
             "asset_cfg": SceneEntityCfg("robot"),
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
+            "standing_height_threshold": taks_t1.DEFAULT_TRUNK_HEIGHT * 0.8,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
             "mode": "l1",
         },
     )
 
-    # 上半身关节（双臂 + 腕 + 脖 + 腰）单独罚偏离
+    # 上半身关节（除腰外全部）单独罚偏离
     joint_deviation_l1_upper_body = RewTerm(
         func=mdp.joint_deviation_if_standing,
         weight=-0.05,
@@ -243,19 +236,12 @@ class RewardsCfg:
                 "robot",
                 joint_names=taks_t1.ARM_JOINT_NAMES
                 + taks_t1.WRIST_JOINT_NAMES
-                + taks_t1.NECK_JOINT_NAMES
-                + taks_t1.WAIST_JOINT_NAMES,
+                + taks_t1.NECK_JOINT_NAMES,
             ),
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
+            "standing_height_threshold": taks_t1.DEFAULT_TRUNK_HEIGHT * 0.8,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
             "mode": "l1",
         },
-    )
-
-    ankle_torques = RewTerm(
-        func=mdp.joint_torques_l2,
-        weight=-1e-3,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*_ankle_.*_joint")},
     )
 
     ang_vel_xy = RewTerm(
@@ -267,7 +253,7 @@ class RewardsCfg:
     orientation = RewTerm(
         func=mdp.flat_orientation_l2,
         weight=-5.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["pelvis"])},
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["base_link"])},
     )
 
     not_moving = RewTerm(
@@ -277,52 +263,36 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "weight_lin": 1.0,
             "weight_ang": 1.0,
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
+            "standing_height_threshold": taks_t1.DEFAULT_TRUNK_HEIGHT * 0.8,
             "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
         },
     )
 
-    # 美观/姿态
     illegal_contacts = RewTerm(
         func=mdp.illegal_contact,
         weight=-1.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=taks_t1.TAKS_T1_UNDESIRED_CONTACTS_LINKS),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=taks_t1.UNDESIRED_CONTACTS_LINKS),
             "threshold": 1.0,
-        },
-    )
-
-    feet_distance = RewTerm(
-        func=mdp.feet_distance_from_ref_if_standing,
-        weight=-50.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=taks_t1.TAKS_T1_FEET_LINK_NAMES),
-            "ref_distance": 0.3,  # Taks 两踝默认间距 ~0.33m
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
-            "norm": "l1",
-        },
-    )
-
-    feet_yaw_mean = RewTerm(
-        func=mdp.feet_yaw_mean_vs_base_if_standing,
-        weight=-5.0,
-        params={
-            "feet_asset_cfg": SceneEntityCfg("robot", body_names=taks_t1.TAKS_T1_FEET_LINK_NAMES),
-            "base_body_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
         },
     )
 
     root_acc = RewTerm(
         func=mdp.body_acc_l2,  # type: ignore
         weight=-5e-4,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names="pelvis")},
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")},
     )
 
-    no_height_progress_termination = RewTerm(
-        func=mdp.is_terminated_term,
-        weight=-5.0,
-        params={"term_keys": "no_height_progress"},
+    # SUCCESS 信号：回合超时（走完整段）时仍保持在站立高度则给奖励，
+    # 鼓励"站起来并稳住整段 15s"，而不是只在某一帧达到高度。
+    standing_at_timeout = RewTerm(
+        func=mdp.standing_at_timeout,
+        weight=5.0,
+        params={
+            "min_height": taks_t1.DEFAULT_TRUNK_HEIGHT * 0.8,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
+        },
     )
 
 
@@ -331,15 +301,18 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    no_height_progress = DoneTermEx(
-        func=mdp.no_height_progress,
-        termination_type="bad",
-        sigma=1.0,
+    # 防飞/防爆护栏：被吊带弹飞过高、速度爆炸或出现 NaN 时立即结束该回合，
+    # 避免飞行状态污染整批训练数据。target≈0.45m，正常过冲也远低于 1.2m。
+    # 注：移除了原 no_height_progress —— 它对 10% 站立初始化的环境几乎必然触发
+    # （初始就 0.45，要求再升 +0.2=0.65 不可能），且 sigma 罚 + 奖励项 -5/-100 双重惩罚，
+    # 考的是吊带抬没抬而非策略学没学会；吊带已是永久托举，无需该项。
+    invalid_state = DoneTerm(
+        func=mdp.invalid_state,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="pelvis"),
-            "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
-            "height_increase_threshold": 0.2,
-            "time_limit_s": 10.0,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "max_root_height": 1.2,
+            "max_lin_vel": 10.0,
+            "max_ang_vel": 40.0,
         },
     )
 
@@ -406,7 +379,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="pelvis"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
             "mass_distribution_params": (-1.0, 3.0),
             "operation": "add",
         },
@@ -425,7 +398,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_com,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="pelvis"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
             "com_range": {"x": (-0.15, 0.15), "y": (-0.05, 0.05), "z": (-0.15, 0.15)},
         },
     )
@@ -436,7 +409,7 @@ class EventCfg:
         mode="interval",
         interval_range_s=(0.0, 10.0),
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="pelvis"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
             "force_range": (-10.0, 10.0),
             "torque_range": (-5.0, 5.0),
         },
@@ -447,7 +420,10 @@ class EventCfg:
         mode="interval",
         interval_range_s=(0.0, 10.0),
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=[".*_wrist_.*_link", ".*_ankle_roll_link"]),
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=[".*_wrist_.*_link", ".*_elbow_link", "neck_.*_link"],
+            ),
             "force_range": (-5.0, 5.0),
             "torque_range": (-0.5, 0.5),
         },
@@ -480,29 +456,8 @@ class EventCfg:
 
 @configclass
 class CurriculumCfg:
-
-    terrain_levels = CurrTerm(
-        func=mdp.terrain_levels_standing_at_timeout,
-        params={
-            "min_height": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT * 0.8,
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("height_measurement_sensor"),
-            "n_successes": 5,
-            "n_failures": 5,
-        },
-    )
-
-    # 站立率达标后逐步撤掉吊带辅助力（有腿机器人最终应能自己站住）
-    adaptive_lift = CurrTerm(
-        func=mdp.adaptive_force_decay,
-        params={
-            "action_name": "lift",
-            "standing_height_threshold": taks_t1.TAKS_T1_DEFAULT_TRUNK_HEIGHT - 0.1,
-            "threshold": 0.7,
-            "ema_alpha": 0.01,
-            "disable_threshold": 0.01,
-        },
-    )
+    # 注：移除了 adaptive_lift（adaptive_force_decay）—— 它会在站立率达标后把吊带力
+    # 单调衰减到 0 且永不恢复，但无腿机器人一旦撤力必塌。此处吊带为永久虚拟支撑。
 
     increase_action_rate_regularization = CurrTerm(
         func=mdp.update_reward_weight_step,
@@ -511,17 +466,6 @@ class CurriculumCfg:
             "start_step": 25_000 * from_scratch,
             "num_steps": 50_000 * with_curriculum,
             "terminal_weight": -0.1,
-            "use_log_space": True,
-        },
-    )
-
-    increase_no_progress_penalty = CurrTerm(
-        func=mdp.update_reward_weight_step,
-        params={
-            "reward_name": "no_height_progress_termination",
-            "start_step": 60_000 * from_scratch,
-            "num_steps": 60_000 * with_curriculum,
-            "terminal_weight": -100,
             "use_log_space": True,
         },
     )
@@ -552,7 +496,7 @@ class CurriculumCfg:
 @configclass
 class ViewerCfg:
     eye: tuple[float, float, float] = (0.0, -3.0, 1.5)
-    lookat: tuple[float, float, float] = (0.0, 0.0, 0.7)
+    lookat: tuple[float, float, float] = (0.0, 0.0, 0.5)
     cam_prim_path: str = "/OmniverseKit_Persp"
     resolution: tuple[int, int] = (1280, 720)
     origin_type = "asset_root"
@@ -561,7 +505,7 @@ class ViewerCfg:
 
 
 @configclass
-class TaksT1StandUpEnvCfg(ManagerBasedRLEnvCfg):
+class SemiTaksT1StandUpEnvCfg(ManagerBasedRLEnvCfg):
     scene: SceneCfg = SceneCfg(num_envs=4096, env_spacing=2.5)
 
     observations: ObservationsCfg = ObservationsCfg()
@@ -588,9 +532,5 @@ class TaksT1StandUpEnvCfg(ManagerBasedRLEnvCfg):
         if self.scene.height_measurement_sensor is not None:
             self.scene.height_measurement_sensor.update_period = self.sim.dt
 
-        if getattr(self.curriculum, "terrain_levels", None) is not None:
-            if self.scene.terrain.terrain_generator is not None:
-                self.scene.terrain.terrain_generator.curriculum = True
-        else:
-            if self.scene.terrain.terrain_generator is not None:
-                self.scene.terrain.terrain_generator.curriculum = False
+        if self.scene.terrain.terrain_generator is not None:
+            self.scene.terrain.terrain_generator.curriculum = False

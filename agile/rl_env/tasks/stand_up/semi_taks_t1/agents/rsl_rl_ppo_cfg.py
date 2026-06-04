@@ -12,20 +12,24 @@ from agile.rl_env.rsl_rl import (  # noqa: F401
 
 
 @configclass
-class TaksT1StandUpPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
+class SemiTaksT1StandUpPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
     seed = 42
     num_steps_per_env = 24
     max_iterations = 100_000
     save_interval = 250
-    experiment_name = "stand_up_taks_t1"
-    run_name = "stand_up_taks_t1"
-    wandb_project = "StandUp-TaksT1"
+    experiment_name = "stand_up_semi_taks_t1"
+    run_name = "stand_up_semi_taks_t1"
+    wandb_project = "StandUp-SemiTaksT1"
     empirical_normalization = False
     enable_entropy_coef_annealing = False
     entropy_coef_annealing_start_progress = 0.2
     enable_entropy_coef_annealing_success_rate = 0.9
 
-    fallen_state_dataset_cfg: FallenStateDatasetCfg | None = FallenStateDatasetCfg()
+    fallen_state_dataset_cfg: FallenStateDatasetCfg | None = FallenStateDatasetCfg(
+        spawn_orientation="random",
+        spawn_joint_mode="random",
+        spawn_height_offset=1.0,
+    )
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
