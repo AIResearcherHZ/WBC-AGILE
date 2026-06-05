@@ -444,6 +444,7 @@ class ViewerState:
 
 def run(args):
     import mujoco
+    import mujoco.viewer
 
     device = torch.device(
         "cuda" if (args.device == "auto" and torch.cuda.is_available()) else ("cpu" if args.device == "auto" else args.device)

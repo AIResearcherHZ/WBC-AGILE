@@ -289,27 +289,27 @@ export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYT
 export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 8192 \
+  --num_envs 6144 \
   --headless
 
 # 单节点多GPU训练（DDP）
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 8192 \
+  --num_envs 6144 \
   --headless \
   --distributed
 
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 8192 \
+  --num_envs 6144 \
   --headless \
   --distributed
 
 ./run_train.sh standup_taks_t1 python -m torch.distributed.run \
   --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 8192 \
+  --num_envs 6144 \
   --headless \
   --distributed
 # 查看实时输出: tmux attach -t standup_taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_taks_t1
