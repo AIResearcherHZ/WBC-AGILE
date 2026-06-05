@@ -92,7 +92,10 @@ tensorboard \
   --port 6006
 
 # 单卡训练
-python scripts/train.py --task Velocity-T1-v0 --num_envs 8192 --headless
+python scripts/train.py \
+  --task Velocity-T1-v0 \
+  --num_envs 8192 \
+  --headless
 
 # 单节点多GPU训练（DDP）
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
@@ -286,6 +289,7 @@ tensorboard \
   --port 6006
 
 【单卡训练】
+export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python scripts/train.py \
   --task StandUp-Taks-T1-v0 \
   --num_envs 4096 \

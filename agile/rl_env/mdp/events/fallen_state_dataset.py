@@ -217,7 +217,13 @@ class FallenStateDataset:
         all_env_ids = torch.arange(env.num_envs, device=env.device)
         decimation = env.cfg.decimation
 
+        saved_joint_stiffness = robot.data.joint_stiffness.clone()
+        saved_joint_damping = robot.data.joint_damping.clone()
+
         try:
+            robot.write_joint_stiffness_to_sim(0.0)
+            robot.write_joint_damping_to_sim(0.0)
+
             # Collect states for each terrain level
             for level in range(self._num_terrain_levels):
                 if verbose:
@@ -272,6 +278,8 @@ class FallenStateDataset:
                 total_states = sum(self.get_num_states(lvl) for lvl in range(self._num_terrain_levels))
                 print(f"[FallenStateDataset] Collection complete: {total_states} total states")
         finally:
+            robot.write_joint_stiffness_to_sim(saved_joint_stiffness)
+            robot.write_joint_damping_to_sim(saved_joint_damping)
             # Re-enable terminations for normal training
             env._disable_terminations = False
             # Reset terrain levels to 0 (easiest) so training starts from curriculum beginning
