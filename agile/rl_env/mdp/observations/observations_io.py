@@ -92,6 +92,15 @@ def velocity_height_command(
     return command_term.command.unsqueeze(1)
 
 
+def zero_command(
+    env: ManagerBasedRLEnv,
+    num_commands: int = 3,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),  # noqa: ARG001
+) -> torch.Tensor:
+    """Return a zero command for tasks without a command manager (e.g. stand-up)."""
+    return torch.zeros(env.num_envs, num_commands, device=env.device)
+
+
 def base_height_from_sensor(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,

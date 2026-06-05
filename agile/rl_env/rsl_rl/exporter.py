@@ -228,11 +228,10 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 (obs, h_in, c_in),
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version=11,
+                opset_version=18,
                 verbose=self.verbose,
                 input_names=["obs", "h_in", "c_in"],
                 output_names=["actions", "h_out", "c_out"],
-                dynamic_axes={},
             )
         else:
             obs = torch.zeros(1, self.actor.layers[0].in_features)
@@ -241,9 +240,8 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 (obs,),
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version=11,
+                opset_version=18,
                 verbose=self.verbose,
                 input_names=["obs"],
                 output_names=["actions"],
-                dynamic_axes={},
             )

@@ -66,6 +66,24 @@ python scripts/export_policy.py --task Velocity-T1-v0 --checkpoint <model.pt> --
 python scripts/eval.py --task Velocity-T1-v0 --checkpoint <model.pt> --export_io
 python scripts/export_IODescriptors.py --task Velocity-T1-v0 --output_dir ./io_descriptors
 
+【Sim2MuJoCo — T1 速度跟踪】
+# T1 的 MuJoCo 模型(23自由度,本仓库不自带)，路径变量供下方所有命令复用
+MJCF=/home/xhz/mjlab_playground/src/mjlab_playground/asset_zoo/robots/booster_t1/xmls/t1.xml
+CKPT=agile/data/policy/velocity_t1/booster_t1_velocity_v0.pt
+CFG=agile/data/policy/velocity_t1/booster_t1_velocity_v0.yaml
+
+# 交互模式（键盘控制指令，带 viewer）
+python scripts/sim2mujoco_eval.py --checkpoint $CKPT --config $CFG --mjcf $MJCF --duration 30.0
+
+# 确定性指令扫频（无 viewer，保存数据）
+python scripts/sim2mujoco_eval.py --checkpoint $CKPT --config $CFG --mjcf $MJCF \
+  --eval-config agile/sim2mujoco/configs/x_velocity_sweep.yaml --save-data --no-viewer
+
+# 随机指令压力测试（所有维度随机）
+python scripts/sim2mujoco_eval.py --checkpoint $CKPT --config $CFG --mjcf $MJCF \
+  --random-commands all --random-interval 2.0 --random-seed 42 --duration 50.0 --save-data --no-viewer
+# 可选调参: --pd-scale 0.3  --noise-scale 1.0
+
 【多卡 / 后台 / TensorBoard】
 # TensorBoard训练曲线
 tensorboard \
@@ -132,6 +150,40 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --distributed
 # 查看实时输出: tmux attach -t standup_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_t1
 
+# Play — StandUp（无 checkpoint，验证环境/展示摔倒姿态）
+python scripts/play.py --task StandUp-T1-v0 --num_envs 16
+python scripts/play.py --task StandUp-T1-v0 --num_envs 16 --validate-fallen-states
+python scripts/play.py --task StandUp-T1-v0 --num_envs 1  --real-time
+python scripts/play.py --task StandUp-T1-v0 --num_envs 4  --video --video_length 400
+
+# 评估 — StandUp（需要 checkpoint，输出量化指标）
+export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+python scripts/eval.py --task StandUp-T1-v0 --num_envs 4 \
+  --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/model_4000.pt \
+  --run_evaluation
+
+# 评估 + 保存轨迹 + 自动生成 HTML 报告
+python scripts/eval.py --task StandUp-T1-v0 --num_envs 32 \
+  --checkpoint logs/rsl_rl/stand_up_t1/<run>/model_<iter>.pt \
+  --run_evaluation --save_trajectories --generate_report
+
+# 评估 + 观测噪声压力测试
+python scripts/eval.py --task StandUp-T1-v0 --num_envs 32 \
+  --checkpoint logs/rsl_rl/stand_up_t1/<run>/model_<iter>.pt \
+  --run_evaluation --noise_scale 0.1
+
+# Sim2MuJoCo — StandUp
+# 步骤1: 生成 IO 描述符 yaml（eval.py 导出的 policy.pt 同目录没有 yaml，需单独生成）
+python scripts/export_IODescriptors.py \
+  --task StandUp-T1-v0 \
+  --output_dir logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported
+
+# 步骤2: 运行 sim2sim（无速度指令，纯站起策略）
+python scripts/sim2mujoco_eval.py \
+  --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/policy.pt \
+  --config logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/standup_t1_v0_IO_descriptors.yaml \
+  --mjcf /home/xhz/mjlab_playground/src/mjlab_playground/asset_zoo/robots/booster_t1/xmls/scene.xml \
+  --duration 20.0
 
 ================================================================================
                               本体:G1
