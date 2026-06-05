@@ -25,6 +25,7 @@ import statistics
 import time
 import torch
 from collections import deque
+from datetime import timedelta
 from tensordict.tensordict import TensorDict
 
 import rsl_rl
@@ -653,6 +654,12 @@ class OnPolicyRunner:
             )
 
         # initialize torch distributed
-        torch.distributed.init_process_group(backend="nccl", rank=self.gpu_global_rank, world_size=self.gpu_world_size)
+        nccl_timeout_min = int(os.getenv("NCCL_PG_TIMEOUT_MIN", "30"))
+        torch.distributed.init_process_group(
+            backend="nccl",
+            rank=self.gpu_global_rank,
+            world_size=self.gpu_world_size,
+            timeout=timedelta(minutes=nccl_timeout_min),
+        )
         # set device to the local rank
         torch.cuda.set_device(self.gpu_local_rank)

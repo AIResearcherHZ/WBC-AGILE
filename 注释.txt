@@ -161,8 +161,10 @@ python scripts/play.py --task StandUp-T1-v0 --num_envs 4  --video --video_length
 
 # 评估 — StandUp（需要 checkpoint，输出量化指标）
 export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+
+export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python scripts/eval.py --task StandUp-T1-v0 --num_envs 4 \
-  --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/model_4000.pt \
+  --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/model_9000.pt \
   --run_evaluation
 
 # 评估 + 保存轨迹 + 自动生成 HTML 报告
@@ -181,13 +183,6 @@ python scripts/export_IODescriptors.py \
   --task StandUp-T1-v0 \
   --output_dir logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported
 
-# 步骤2: 运行 sim2sim（无速度指令，纯站起策略）
-python scripts/sim2mujoco_eval.py \
-  --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/policy.pt \
-  --config logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/standup_t1_v0_IO_descriptors.yaml \
-  --mjcf agile/rl_env/assets/robot_menagerie/booster/t1/mujoco/scene.xml \
-  --duration 20.0 \
-  --init-state supine
 
 ================================================================================
                               本体:G1
@@ -290,32 +285,34 @@ tensorboard \
 
 【单卡训练】
 export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+
+export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
 python scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless
 
 # 单节点多GPU训练（DDP）
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
-./run_train.sh taks_t1 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
-  --standalone --nproc-per-node=2 scripts/train.py \
+./run_train.sh standup_taks_t1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
-# 查看实时输出: tmux attach -t taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t taks_t1
+# 查看实时输出: tmux attach -t standup_taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_taks_t1
 
 
 ================================================================================
@@ -343,21 +340,21 @@ tensorboard \
 # 单节点多GPU训练（DDP）
 python -m torch.distributed.run --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Semi-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nproc-per-node=2 scripts/train.py \
   --task StandUp-Semi-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
 
-./run_train.sh getup_taks CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
-  --standalone --nproc-per-node=2 scripts/train.py \
+./run_train.sh standup_semi_taks_t1 python -m torch.distributed.run \
+  --standalone --nproc-per-node=4 scripts/train.py \
   --task StandUp-Semi-Taks-T1-v0 \
-  --num_envs 4096 \
+  --num_envs 8192 \
   --headless \
   --distributed
-# 查看实时输出: tmux attach -t getup_taks  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t getup_taks
+# 查看实时输出: tmux attach -t standup_semi_taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_semi_taks_t1

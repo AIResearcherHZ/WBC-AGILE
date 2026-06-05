@@ -87,7 +87,6 @@ class MuJocoSimulation:
         enable_viewer: bool = True,
         mjcf_path: Path | None = None,
         command_manager=None,
-        init_pose: str = "default",
     ):
         """
         Initialize MuJoCo simulation.
@@ -98,15 +97,10 @@ class MuJocoSimulation:
             enable_viewer: Whether to enable the viewer.
             mjcf_path: Path to MJCF file (overrides config).
             command_manager: Optional CommandManager for interactive control.
-            init_pose: Initial root pose for floating-base robots. One of
-                "default" (upright standing), "supine" (lying on back), or
-                "prone" (lying face down). Used to verify stand-up policies,
-                which expect to start from a fallen state.
         """
         self.device = device
         self.config = config
         self.command_manager = command_manager
-        self.init_pose = init_pose
 
         # Pause / single-step control (toggled via keyboard).
         self.paused = enable_viewer
@@ -316,21 +310,6 @@ class MuJocoSimulation:
             self._default_qpos[:3] = [0.0, 0.0, 0.76]
             self._default_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 
-            # Override with a fallen pose for stand-up policy verification.
-            # The stand-up policy is trained to recover from a fallen state, so
-            # starting upright never exercises it. "supine"/"prone" tip the robot
-            # onto its back/front by rotating 90 deg about the body Y (pitch) axis.
-            # MuJoCo quaternion convention is [w, x, y, z].
-            if self.init_pose in ("supine", "prone"):
-                half_sqrt2 = 0.7071067811865476  # cos(45 deg) = sin(45 deg)
-                # -90 deg pitch -> face up (supine); +90 deg pitch -> face down (prone).
-                sign = -1.0 if self.init_pose == "supine" else 1.0
-                self._default_qpos[:3] = [0.0, 0.0, 0.30]
-                self._default_qpos[3:7] = [half_sqrt2, 0.0, sign * half_sqrt2, 0.0]
-                print(f"  Initial root pose overridden to '{self.init_pose}' (fallen) for stand-up verification")
-            elif self.init_pose != "default":
-                print(f"  Warning: unknown init_pose '{self.init_pose}', using default upright pose")
-
         # Apply default joint positions from config (YAML/policy joint order -> MJCF order).
         robot_cfg = config.get("articulations", {}).get("robot", {})
         default_joint_pos = robot_cfg.get("default_joint_pos")
@@ -356,32 +335,16 @@ class MuJocoSimulation:
             print(f"  Applied default joint positions from config ({len(yaml_joint_names)} joints)")
 
         # Override MJCF joint frictionloss and damping for all actuated joints.
-        # frictionloss: use the per-joint training value from config
-        # (`default_joint_friction`) so Coulomb friction matches training. Falls
-        # back to a flat 0.01 if the config does not provide it.
-        # damping: zero it out since the PD controller already handles all
-        # damping via kd gains (passive joint damping is not used in training).
-        default_joint_friction = robot_cfg.get("default_joint_friction")
-        friction_by_mjcf_idx = None
-        if default_joint_friction is not None and yaml_joint_names is not None:
-            friction_by_mjcf_idx = {}
-            for yaml_idx, jname in enumerate(yaml_joint_names):
-                jnt_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, jname)
-                if jnt_id >= 0:
-                    friction_by_mjcf_idx[jnt_id] = default_joint_friction[yaml_idx]
-
+        # frictionloss: MJCF has 0.2, set to 0.1 (matching holosoma G1) for
+        # realistic Coulomb friction while being less aggressive than the MJCF default.
+        # damping: MJCF has 0.05, zero it out since the PD controller already
+        # handles all damping via kd gains.
         for i in range(self.mj_model.njnt):
             if self.mj_model.jnt_type[i] != mujoco.mjtJoint.mjJNT_FREE:
                 dof_addr = self.mj_model.jnt_dofadr[i]
-                if friction_by_mjcf_idx is not None and i in friction_by_mjcf_idx:
-                    self.mj_model.dof_frictionloss[dof_addr] = friction_by_mjcf_idx[i]
-                else:
-                    self.mj_model.dof_frictionloss[dof_addr] = 0.01
+                self.mj_model.dof_frictionloss[dof_addr] = 0.1
                 self.mj_model.dof_damping[dof_addr] = 0.0
-        if friction_by_mjcf_idx is not None:
-            print("  Set joint frictionloss from config (default_joint_friction), damping=0.0")
-        else:
-            print("  Set joint frictionloss=0.01 (config had none), damping=0.0")
+        print("  Set joint frictionloss=0.1, damping=0.0 for all actuated joints")
 
         # Apply per-joint armature from config to match training dynamics.
         # The MJCF uses a flat armature=0.01 for all joints, but training uses

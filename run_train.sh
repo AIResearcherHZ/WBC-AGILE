@@ -25,11 +25,6 @@ TS="$(date +%Y%m%d_%H%M%S)"
 LOG="logs/launch/${SESSION}_${TS}.log"
 
 # ── rsl_rl 隔离(不卸载、不影响 atom01_train)────────────────────────────────────
-# 本仓库自带定制版 rsl_rl(v2.3.3:L2C2 / 对称性 / 熵退火 / 师生蒸馏),与共享的
-# isaaclab conda 环境里 atom01_train 全局安装的 rsl_rl(v3.3.0)不兼容。这里把自带版
-# 前置到 PYTHONPATH:import 时 PathFinder 先扫 sys.path,早于全局 editable 安装注册在
-# sys.meta_path 末尾的 finder,因此经本脚本启动的训练优先用自带版;atom01_train 的
-# 全局安装完全不受影响。注意:务必经本脚本启动训练(裸跑 python scripts/train.py 不带
 # PYTHONPATH 会用到环境里那份 v3.3.0,与本仓库配置不兼容)。
 RSL_RL_DIR="$(pwd)/agile/algorithms/rsl_rl"
 [ -d "$RSL_RL_DIR/rsl_rl" ] || echo "⚠️  未找到自带 rsl_rl 源码: $RSL_RL_DIR/rsl_rl" >&2
@@ -41,7 +36,8 @@ fi
 
 # 把训练命令安全拼成一段 shell(printf %q 保留引号),在新 tmux 会话里执行并同时 tee 到日志。
 # PYTHONUNBUFFERED=1 让日志实时刷新;结尾 read 让窗口在训练结束后保留,方便看尾部输出。
-INNER="export PYTHONPATH=$(printf '%q' "$RSL_RL_DIR")\${PYTHONPATH:+:\$PYTHONPATH}; PYTHONUNBUFFERED=1 $(printf '%q ' "$@") 2>&1 | tee $(printf '%q' "$LOG"); echo; echo '==== 训练进程已退出,按回车关闭本窗口 ===='; read"
+NCCL_ENV="export NCCL_P2P_DISABLE=\${NCCL_P2P_DISABLE:-1} NCCL_IB_DISABLE=\${NCCL_IB_DISABLE:-1} TORCH_NCCL_ASYNC_ERROR_HANDLING=\${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1} TORCH_NCCL_DESYNC_DEBUG=\${TORCH_NCCL_DESYNC_DEBUG:-1} TORCH_NCCL_ENABLE_MONITORING=\${TORCH_NCCL_ENABLE_MONITORING:-1} TORCH_NCCL_TRACE_BUFFER_SIZE=\${TORCH_NCCL_TRACE_BUFFER_SIZE:-2000} TORCH_NCCL_DUMP_ON_TIMEOUT=\${TORCH_NCCL_DUMP_ON_TIMEOUT:-1} TORCH_NCCL_DEBUG_INFO_TEMP_FILE=\${TORCH_NCCL_DEBUG_INFO_TEMP_FILE:-/tmp/nccl_trace_} NCCL_DEBUG=\${NCCL_DEBUG:-WARN}"
+INNER="export PYTHONPATH=$(printf '%q' "$RSL_RL_DIR")\${PYTHONPATH:+:\$PYTHONPATH}; $NCCL_ENV; PYTHONUNBUFFERED=1 $(printf '%q ' "$@") 2>&1 | tee $(printf '%q' "$LOG"); echo; echo '==== 训练进程已退出,按回车关闭本窗口 ===='; read"
 tmux new-session -d -s "$SESSION" "bash -lc $(printf '%q' "$INNER")"
 
 echo "✅ 已在 tmux 会话 '$SESSION' 启动训练 —— 现在断开 SSH 也不会中断。"
