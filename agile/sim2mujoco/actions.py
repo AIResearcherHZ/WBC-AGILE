@@ -37,6 +37,15 @@ class ActionTerm:
         self.config = config
         self.device = device
 
+        # Detect relative vs absolute joint position action.
+        # RelativeJointPositionAction applies the target as:
+        #     target = current_joint_pos + (raw * scale + offset)
+        # whereas the absolute JointPositionAction applies:
+        #     target = raw * scale + offset
+        # The IO descriptor encodes this in `full_path` (and the term name).
+        full_path = config.get("full_path", "") or ""
+        self.is_relative = ("Relative" in full_path) or name.lower().startswith("relative")
+
         # Parse action configuration.
         self.action_joint_names = config.get("joint_names", [])
 
@@ -169,17 +178,23 @@ class ActionProcessor:
 
         return result
 
-    def process(self, actions: torch.Tensor) -> JointCommand:
+    def process(self, actions: torch.Tensor, current_joint_pos: torch.Tensor | None = None) -> JointCommand:
         """
         Process policy actions to joint commands.
 
         Args:
             actions: Raw actions from policy, shape (total_action_dim,).
+            current_joint_pos: Current joint positions in MJCF/simulation joint
+                order, shape (num_joints,). Required when any action term is a
+                relative joint position action, because the PD target is then
+                ``current_joint_pos + processed_action``. Ignored for absolute
+                action terms.
 
         Returns:
             JointCommand with positions, kp, kd for all joints.
         """
-        # Start with zeros
+        # For absolute action terms, joints not driven by any term default to a
+        # zero target. For relative terms the baseline is the current position.
         joint_positions = torch.zeros_like(self.default_joint_pos)
 
         # Apply each action term.
@@ -187,7 +202,17 @@ class ActionProcessor:
             action_slice = actions[start:end]
             processed = term.process(action_slice)
 
-            # Write to appropriate joint indices.
-            joint_positions[term.joint_indices] = processed
+            if term.is_relative:
+                if current_joint_pos is None:
+                    raise ValueError(
+                        f"Action term '{term.name}' is a relative joint position action and requires "
+                        "current_joint_pos to compute the PD target (target = current_joint_pos + "
+                        "scale * action + offset). Pass sim_state.joint_pos to ActionProcessor.process()."
+                    )
+                baseline = current_joint_pos[term.joint_indices].to(joint_positions.dtype)
+                joint_positions[term.joint_indices] = baseline + processed
+            else:
+                # Absolute target.
+                joint_positions[term.joint_indices] = processed
 
         return JointCommand(position=joint_positions, kp=self.kp, kd=self.kd)

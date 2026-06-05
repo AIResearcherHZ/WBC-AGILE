@@ -72,6 +72,14 @@ def main():
     parser.add_argument("--config", type=Path, required=True, help="Path to YAML config")
     parser.add_argument("--mjcf", type=Path, default=None, help="Path to MJCF file (optional, overrides config)")
     parser.add_argument("--duration", type=float, default=10.0, help="Simulation duration (seconds)")
+    parser.add_argument(
+        "--init-state",
+        type=str,
+        default="default",
+        choices=["default", "supine", "prone"],
+        help="Initial root pose for floating-base robots. 'default' starts upright; "
+        "'supine'/'prone' start the robot lying on its back/front to verify a stand-up policy.",
+    )
     parser.add_argument("--device", type=str, default="auto", help="Device: cuda, cpu, or auto")
     parser.add_argument("--no-viewer", action="store_true", help="Disable MuJoCo viewer")
     parser.add_argument("--log-freq", type=int, default=100, help="Logging frequency (control steps)")
@@ -189,7 +197,9 @@ def main():
 
     # Create simulation (command_manager will be attached after provider creation).
     print("\nCreating simulation...")
-    sim = MuJocoSimulation(config, device, enable_viewer=not args.no_viewer, mjcf_path=args.mjcf)
+    sim = MuJocoSimulation(
+        config, device, enable_viewer=not args.no_viewer, mjcf_path=args.mjcf, init_pose=args.init_state
+    )
     print(f"  Num joints: {sim.num_joints}")
     print(f"  Fixed base: {sim.fixed_base}")
     print(f"  Physics dt: {sim.physics_dt}s ({1.0 / sim.physics_dt:.0f} Hz)")
@@ -253,7 +263,8 @@ def main():
     print(f"  Total action dim: {act_processor.total_action_dim}")
     print("  Action terms:")
     for term in act_processor.action_terms:
-        print(f"    - {term.name}: {term.action_dim} joints (scale: {term.scale})")
+        mode = "relative" if term.is_relative else "absolute"
+        print(f"    - {term.name}: {term.action_dim} joints (scale: {term.scale}, mode: {mode})")
 
     # Reset.
     sim.reset()
@@ -353,8 +364,9 @@ def main():
             # Update last action.
             obs_processor.set_last_action(actions)
 
-            # Process actions.
-            joint_cmd = act_processor.process(actions)
+            # Process actions. Relative joint position actions need the current
+            # joint positions to compute the PD target (target = q + scale*action).
+            joint_cmd = act_processor.process(actions, current_joint_pos=sim_state.joint_pos)
 
             # Step simulation (decimation times).
             for _ in range(sim.decimation):

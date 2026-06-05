@@ -67,8 +67,8 @@ python scripts/eval.py --task Velocity-T1-v0 --checkpoint <model.pt> --export_io
 python scripts/export_IODescriptors.py --task Velocity-T1-v0 --output_dir ./io_descriptors
 
 【Sim2MuJoCo — T1 速度跟踪】
-# T1 的 MuJoCo 模型(23自由度,本仓库不自带)，路径变量供下方所有命令复用
-MJCF=/home/xhz/mjlab_playground/src/mjlab_playground/asset_zoo/robots/booster_t1/xmls/t1.xml
+# T1 的 MuJoCo 模型(23自由度,已随仓库自带;scene.xml 含地面+电机,t1.xml 仅本体)，路径变量供下方所有命令复用
+MJCF=agile/rl_env/assets/robot_menagerie/booster/t1/mujoco/scene.xml
 CKPT=agile/data/policy/velocity_t1/booster_t1_velocity_v0.pt
 CFG=agile/data/policy/velocity_t1/booster_t1_velocity_v0.yaml
 
@@ -182,8 +182,9 @@ python scripts/export_IODescriptors.py \
 python scripts/sim2mujoco_eval.py \
   --checkpoint logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/policy.pt \
   --config logs/rsl_rl/stand_up_t1/2026-06-04_16-34-59_stand_up_t1/exported/standup_t1_v0_IO_descriptors.yaml \
-  --mjcf /home/xhz/mjlab_playground/src/mjlab_playground/asset_zoo/robots/booster_t1/xmls/scene.xml \
-  --duration 20.0
+  --mjcf agile/rl_env/assets/robot_menagerie/booster/t1/mujoco/scene.xml \
+  --duration 20.0 \
+  --init-state supine
 
 ================================================================================
                               本体:G1

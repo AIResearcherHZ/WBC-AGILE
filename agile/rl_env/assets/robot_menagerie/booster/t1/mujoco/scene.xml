@@ -1,0 +1,49 @@
+<mujoco model="T1 scene">
+  <include file="t1.xml"/>
+
+  <statistic center="0 0 0.4" extent="1.2"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4"
+      rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="0 0 0.05" material="groundplane" condim="3"/>
+  </worldbody>
+
+  <actuator>
+    <motor joint="AAHead_yaw" ctrlrange="-7 7"/>
+    <motor joint="Head_pitch" ctrlrange="-7 7"/>
+    <motor joint="Left_Shoulder_Pitch" ctrlrange="-18 18"/>
+    <motor joint="Left_Shoulder_Roll" ctrlrange="-18 18"/>
+    <motor joint="Left_Elbow_Pitch" ctrlrange="-18 18"/>
+    <motor joint="Left_Elbow_Yaw" ctrlrange="-18 18"/>
+    <motor joint="Right_Shoulder_Pitch" ctrlrange="-18 18"/>
+    <motor joint="Right_Shoulder_Roll" ctrlrange="-18 18"/>
+    <motor joint="Right_Elbow_Pitch" ctrlrange="-18 18"/>
+    <motor joint="Right_Elbow_Yaw" ctrlrange="-18 18"/>
+    <motor joint="Waist" ctrlrange="-30 30"/>
+    <motor joint="Left_Hip_Pitch" ctrlrange="-45 45"/>
+    <motor joint="Left_Hip_Roll" ctrlrange="-30 30"/>
+    <motor joint="Left_Hip_Yaw" ctrlrange="-30 30"/>
+    <motor joint="Left_Knee_Pitch" ctrlrange="-60 60"/>
+    <motor joint="Left_Ankle_Pitch" ctrlrange="-24 24"/>
+    <motor joint="Left_Ankle_Roll" ctrlrange="-15 15"/>
+    <motor joint="Right_Hip_Pitch" ctrlrange="-45 45"/>
+    <motor joint="Right_Hip_Roll" ctrlrange="-30 30"/>
+    <motor joint="Right_Hip_Yaw" ctrlrange="-30 30"/>
+    <motor joint="Right_Knee_Pitch" ctrlrange="-60 60"/>
+    <motor joint="Right_Ankle_Pitch" ctrlrange="-24 24"/>
+    <motor joint="Right_Ankle_Roll" ctrlrange="-15 15"/>
+  </actuator>
+</mujoco>
