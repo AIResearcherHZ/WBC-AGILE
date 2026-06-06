@@ -314,6 +314,14 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --distributed
 # 查看实时输出: tmux attach -t standup_taks_t1  (脱离: Ctrl-b 再按 d) | 停止: tmux kill-session -t standup_taks_t1
 
+# 评估 — StandUp（需要 checkpoint，输出量化指标）
+export PYTHONPATH=/home/xhz/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+
+export PYTHONPATH=/root/WBC-AGILE/agile/algorithms/rsl_rl${PYTHONPATH:+:$PYTHONPATH}
+python scripts/eval.py --task StandUp-Taks-T1-v0 --num_envs 4 \
+  --checkpoint logs/rsl_rl/stand_up_taks_t1/2026-06-05_19-14-08_stand_up_taks_t1/model_10000.pt \
+  --run_evaluation
+
 
 ================================================================================
                               本体:Semi-Taks-T1(半身/无腿,吊带站起)

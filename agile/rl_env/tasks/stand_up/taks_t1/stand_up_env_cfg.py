@@ -149,8 +149,30 @@ class ObservationsCfg:
             self.concatenate_terms = False
             self.flatten_history_dim = False
 
+    @configclass
+    class EvalObservationsCfg(ObsGroup):
+        """评估器（scripts/eval.py）消费的观测组。需 concatenate_terms=True、history_length=1，
+        以便 PolicyEvaluator 按 term 维度切片读取真值轨迹。"""
+
+        joint_pos = ObsTerm(func=mdp.joint_pos)
+        joint_vel = ObsTerm(func=mdp.joint_vel)
+        joint_acc = ObsTerm(func=mdp.joint_acc)
+        root_pos = ObsTerm(func=mdp.root_pos_w)
+        root_rot = ObsTerm(func=mdp.root_quat_w)
+        root_lin_vel = ObsTerm(func=mdp.root_lin_vel_w)
+        root_ang_vel = ObsTerm(func=mdp.root_ang_vel_w)
+        # 站立任务无 command manager，给评估器喂零指令。
+        commands = ObsTerm(func=mdp.zero_command, params={"num_commands": 3})
+        actions = ObsTerm(func=mdp.last_action)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+            self.history_length = 1
+
     policy: PolicyObservationCfg = PolicyObservationCfg()
     critic: CriticObservationsCfg = CriticObservationsCfg()
+    eval: EvalObservationsCfg = EvalObservationsCfg()
 
 
 @configclass
