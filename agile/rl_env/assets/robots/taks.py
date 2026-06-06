@@ -25,8 +25,6 @@ HEAD_JOINT_NAMES = NECK_JOINT_NAMES
 LEG_JOINT_NAMES: list[str] = []
 FEET_LINK_NAMES: list[str] = []
 
-# 无腿机器人：base_link 是最底链节，静止离地 ~0.07m。吊带把 base 托到该高度并扶正朝向。
-# 实测把 base 拉到 0.45/0.65 只会整机悬空+躯干瘫倒；0.2m=略离地、靠扶正力矩保持竖直。
 DEFAULT_TRUNK_HEIGHT = 0.2
 
 UNDESIRED_CONTACTS_LINKS = [
@@ -38,13 +36,6 @@ MIN_DELAY_STEPS = 0
 MAX_DELAY_STEPS = 8
 
 
-##
-# Full-body Taks_T1: 腿 + 腰 + 双臂 + 脖子，自由浮动基座，用于运动控制 / 站立任务。
-##
-
-# ── 全身 Taks_T1 站立任务专用常量 ──
-# 与上面无腿 Semi 的同名常量（LEG_JOINT_NAMES=[]/FEET_LINK_NAMES=[]/DEFAULT_TRUNK_HEIGHT=0.2/
-# UNDESIRED_CONTACTS_LINKS）区分；ARM/WRIST/NECK/WAIST_JOINT_NAMES 两者通用，直接复用上面的。
 TAKS_T1_LEG_JOINT_NAMES = [
     ".*_hip_yaw_joint",
     ".*_hip_roll_joint",
@@ -53,12 +44,8 @@ TAKS_T1_LEG_JOINT_NAMES = [
     ".*_ankle_pitch_joint",
     ".*_ankle_roll_joint",
 ]
-# 脚（腿最末端的链节）。Taks 无单独 foot_link，踝 roll 链节即落地脚。
 TAKS_T1_FEET_LINK_NAMES = [".*_ankle_roll_link"]
-# 站立时 pelvis（浮动基座/根链节）的目标离地高度。几何：零位时脚在 pelvis 下方 0.706m；
-# TAKS_T1_CFG 以微屈腿姿态 spawn 于 z=0.75 → 取 0.68（与 Booster 0.65/0.71≈0.91 同比例）。
 TAKS_T1_DEFAULT_TRUNK_HEIGHT = 0.68
-# 站立时不应触地的链节（上半身 + 髋 + 骨盆）。故意不含膝/踝/脚——起身过程中它们会合理着地。
 TAKS_T1_UNDESIRED_CONTACTS_LINKS = [
     "pelvis",
     "torso_link",
@@ -104,7 +91,6 @@ TAKS_T1_CFG = ArticulationCfg(
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.99,
-    # 10Hz, 阻尼比2.0
     actuators={
         "legs_hip_yaw_roll": ImplicitActuatorCfg(
             joint_names_expr=[
@@ -190,6 +176,109 @@ TAKS_T1_CFG = ArticulationCfg(
             armature=0.000313,
         ),
     },
+)
+
+
+TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_TAKS_T1_USD_PATH,
+        activate_contact_sensors=True,
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            fix_root_link=False,
+            solver_position_iteration_count=8,
+            solver_velocity_iteration_count=4,
+        ),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.75),
+        joint_pos={
+            "left_shoulder_roll_joint": 0.16,
+            "right_shoulder_roll_joint": -0.16,
+            ".*_shoulder_pitch_joint": 0.16,
+            ".*_elbow_joint": 1.10,
+            ".*_hip_pitch_joint": -0.14,
+            ".*_knee_joint": 0.36,
+            ".*_ankle_pitch_joint": -0.20,
+        },
+        joint_vel={".*": 0.0},
+    ),
+    soft_joint_pos_limit_factor=0.99,
+    actuators={
+        "all": DelayedDCMotorCfg(
+            max_delay=MAX_DELAY_STEPS,
+            min_delay=MIN_DELAY_STEPS,
+            saturation_effort=130.0,
+            joint_names_expr=[".*"],
+            stiffness={
+                ".*_hip_yaw_joint": 589.409607,
+                ".*_hip_roll_joint": 589.409607,
+                ".*_hip_pitch_joint": 219.499985,
+                ".*_knee_joint": 219.499985,
+                ".*_ankle_.*_joint": 112.434517,
+                "waist_.*": 589.409607,
+                ".*_shoulder_.*": 112.434517,
+                ".*_elbow_joint": 112.434517,
+                ".*_wrist_.*": 6.632374,
+                "neck_.*": 4.936697,
+            },
+            damping={
+                ".*_hip_yaw_joint": 37.522984,
+                ".*_hip_roll_joint": 37.522984,
+                ".*_hip_pitch_joint": 13.973804,
+                ".*_knee_joint": 13.973804,
+                ".*_ankle_.*_joint": 7.157804,
+                "waist_.*": 37.522984,
+                ".*_shoulder_.*": 7.157804,
+                ".*_elbow_joint": 7.157804,
+                ".*_wrist_.*": 0.422230,
+                "neck_.*": 0.157140,
+            },
+            armature={
+                ".*_hip_yaw_joint": 0.149299,
+                ".*_hip_roll_joint": 0.149299,
+                ".*_hip_pitch_joint": 0.055600,
+                ".*_knee_joint": 0.055600,
+                ".*_ankle_.*_joint": 0.028480,
+                "waist_.*": 0.149299,
+                ".*_shoulder_.*": 0.028480,
+                ".*_elbow_joint": 0.028480,
+                ".*_wrist_.*": 0.001680,
+                "neck_.*": 0.000313,
+            },
+            velocity_limit_sim={
+                ".*_hip_.*_joint": 25.0,
+                ".*_knee_joint": 25.0,
+                ".*_ankle_.*_joint": 8.0,
+                "waist_.*": 25.0,
+                ".*_shoulder_.*": 8.0,
+                ".*_elbow_joint": 8.0,
+                ".*_wrist_.*": 8.0,
+                "neck_.*": 8.0,
+            },
+            effort_limit_sim={
+                ".*_hip_yaw_joint": 97.0,
+                ".*_hip_roll_joint": 97.0,
+                ".*_hip_pitch_joint": 120.0,
+                ".*_knee_joint": 120.0,
+                ".*_ankle_.*_joint": 27.0,
+                "waist_.*": 97.0,
+                ".*_shoulder_.*": 27.0,
+                ".*_elbow_joint": 27.0,
+                ".*_wrist_.*": 7.0,
+                "neck_.*": 3.0,
+            },
+        ),
+    },  # type: ignore
 )
 
 

@@ -68,8 +68,7 @@ class SceneCfg(InteractiveSceneCfg):
         debug_vis=False,
     )
 
-    # robots：全身 Taks_T1（隐式执行器配置，含腿）
-    robot = taks_t1.TAKS_T1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot = taks_t1.TAKS_T1_DELAYED_DC_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     # sensors
     contact_forces = ContactSensorCfg(

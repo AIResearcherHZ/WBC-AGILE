@@ -1,5 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
 
 """Taks_T1 StandUp Sim2Sim (32 DOF) — 自包含 MuJoCo 部署/验证脚本。
 
@@ -8,10 +6,12 @@
 结构对标 ``sim2sim/sim2sim_standup_t1.py``（Booster T1，23 DOF），主要差异：
 
   * 32 DOF 全身（腿+腰+双臂+腕+脖），关节顺序为 IsaacLab/PhysX 顺序（与配置声明序不同）。
-  * 执行器是 **ImplicitActuatorCfg**（不是 Booster 的 DelayedDCMotor）：力矩 = 逐关节 PD，
-    再按 ``effort_limit_sim`` **硬截断**；**没有** DC 电机的力矩-转速饱和包络。
+  * 执行器是 **DelayedDCMotorCfg**（与 Booster T1 同构）：力矩 = 逐关节 PD，再经 DC 电机
+    力矩-转速饱和包络整形、按 ``effort_limit_sim`` 截断。训练时还有 0~8 步随机动作延迟，
+    本脚本忽略该延迟（取 0 步），其余逐字节复现 ``TAKS_T1_DELAYED_DC_CFG``。kp/kd/armature/
+    effort/velocity 均沿用真实电机值（= TAKS_T1_CFG，未因换执行器而改动）。
   * MuJoCo 模型的关节自带被动 damping/frictionloss，而 IsaacLab 里 damping 已并入 PD(kd)、
-    friction=0 —— 加载后会把这些被动项清零、并把 armature 对齐 IsaacLab，避免双重计入。
+    friction≈0 —— 加载后会把这些被动项清零、并把 armature 对齐 IsaacLab，避免双重计入。
 
   观测 (510 = 5 帧历史, **term-major**, 每项内部帧从旧到新, IsaacLab 关节顺序):
       [ base_ang_vel ×0.2      (5×3 =15) ]   # 体坐标系角速度(陀螺仪 imu_gyro)
@@ -20,7 +20,7 @@
       [ joint_vel_rel ×0.05    (5×32=160) ]
       [ last_action (raw, clip±100) (5×32=160) ]
   动作 (RelativeJointPositionAction): target = q_now + clip(raw·0.1, -1, 1)
-  执行器: 逐关节 PD(kp/kd) + 逐关节力矩上限(effort)
+  执行器: 逐关节 PD(kp/kd) + DC 电机力矩-转速饱和包络 + 逐关节力矩上限(effort)
   初始化: default/supine/prone 姿态 + settle, 用于触发站起策略
 
 ground-truth 常量由 ``scripts/export_IODescriptors.py --task StandUp-Taks-T1-v0`` 一次性导出
@@ -48,46 +48,41 @@ import torch
 import torch.nn as nn
 from scipy.spatial.transform import Rotation as R
 
-# ---------------------------------------------------------------------------
-# Ground-truth 常量 (由 scripts/export_IODescriptors.py --task StandUp-Taks-T1-v0 导出,
-# 见 logs/.../exported/standup_taks_t1_v0_IO_descriptors.yaml).
-# IsaacLab/PhysX 关节顺序与 MuJoCo 树(DFS)顺序不同 —— 本列表是策略观测/动作的关节顺序.
-# ---------------------------------------------------------------------------
 ISAACLAB_JOINT_NAMES = [
-    "waist_roll_joint",          # 0
-    "waist_pitch_joint",         # 1
-    "waist_yaw_joint",           # 2
-    "left_shoulder_pitch_joint",  # 3
-    "right_shoulder_pitch_joint",  # 4
-    "neck_yaw_joint",            # 5
-    "left_hip_pitch_joint",      # 6
-    "right_hip_pitch_joint",     # 7
-    "left_shoulder_roll_joint",  # 8
-    "right_shoulder_roll_joint",  # 9
-    "neck_roll_joint",           # 10
-    "left_hip_roll_joint",       # 11
-    "right_hip_roll_joint",      # 12
-    "left_shoulder_yaw_joint",   # 13
-    "right_shoulder_yaw_joint",  # 14
-    "neck_pitch_joint",          # 15
-    "left_hip_yaw_joint",        # 16
-    "right_hip_yaw_joint",       # 17
-    "left_elbow_joint",          # 18
-    "right_elbow_joint",         # 19
-    "left_knee_joint",           # 20
-    "right_knee_joint",          # 21
-    "left_wrist_roll_joint",     # 22
-    "right_wrist_roll_joint",    # 23
-    "left_ankle_pitch_joint",    # 24
-    "right_ankle_pitch_joint",   # 25
-    "left_wrist_yaw_joint",      # 26
-    "right_wrist_yaw_joint",     # 27
-    "left_ankle_roll_joint",     # 28
-    "right_ankle_roll_joint",    # 29
-    "left_wrist_pitch_joint",    # 30
-    "right_wrist_pitch_joint",   # 31
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "neck_yaw_joint",
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "neck_roll_joint",
+    "left_hip_roll_joint",
+    "right_hip_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "neck_pitch_joint",
+    "left_hip_yaw_joint",
+    "right_hip_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_knee_joint",
+    "right_knee_joint",
+    "left_wrist_roll_joint",
+    "right_wrist_roll_joint",
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+    "left_wrist_pitch_joint",
+    "right_wrist_pitch_joint",
 ]
-NUM_JOINTS = len(ISAACLAB_JOINT_NAMES)  # 32
+NUM_JOINTS = len(ISAACLAB_JOINT_NAMES)
 
 
 def _by_regex(rules, names):
@@ -103,9 +98,6 @@ def _by_regex(rules, names):
     return out
 
 
-# 逐关节属性 (name -> value), 与 agile/rl_env/assets/robots/taks.py 的 TAKS_T1_CFG 执行器一致.
-# 腿 hip_yaw/hip_roll 与 waist 同组(589/37.5/0.149/97); hip_pitch/knee 同组(219/13.97/0.0556/120);
-# ankle 与 arm(shoulder/elbow) 同组(112/7.16/0.0285/27); wrist(6.63/0.42/0.00168/7); neck(4.94/0.157/0.000313/3).
 KP = _by_regex(
     [
         ("waist", 589.409607),
@@ -128,7 +120,6 @@ KD = _by_regex(
     ],
     ISAACLAB_JOINT_NAMES,
 )
-# 逐关节力矩上限 (= effort_limit_sim). ImplicitActuator 用它对 PD 力矩做硬截断.
 EFFORT_LIMIT = _by_regex(
     [
         ("waist", 97.0),
@@ -140,7 +131,6 @@ EFFORT_LIMIT = _by_regex(
     ],
     ISAACLAB_JOINT_NAMES,
 )
-# 关节电机转子等效转动惯量 (armature). 与 MuJoCo 模型一致, 加载后会强制对齐.
 ARMATURE = _by_regex(
     [
         ("waist", 0.149299),
@@ -152,7 +142,6 @@ ARMATURE = _by_regex(
     ],
     ISAACLAB_JOINT_NAMES,
 )
-# 速度上限 (= soft_joint_vel_limits). ImplicitActuator 不用它整形力矩, 仅留作参考/绘图.
 VELOCITY_LIMIT = _by_regex(
     [
         ("waist", 25.0),
@@ -162,8 +151,8 @@ VELOCITY_LIMIT = _by_regex(
     ],
     ISAACLAB_JOINT_NAMES,
 )
+SATURATION_EFFORT = 130.0
 
-# 默认关节角 (= articulation init_state.joint_pos, 也是 joint_pos_rel 的零点).
 DEFAULT_Q = {n: 0.0 for n in ISAACLAB_JOINT_NAMES}
 DEFAULT_Q.update(
     {
@@ -182,7 +171,6 @@ DEFAULT_Q.update(
     }
 )
 
-# 烘焙成 IsaacLab 顺序的数组 (策略侧的全部计算都在这个顺序下进行).
 KP_ISAAC = np.array([KP[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.float64)
 KD_ISAAC = np.array([KD[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.float64)
 EFFORT_ISAAC = np.array([EFFORT_LIMIT[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.float64)
@@ -190,35 +178,32 @@ ARMATURE_ISAAC = np.array([ARMATURE[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.
 VLIM_ISAAC = np.array([VELOCITY_LIMIT[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.float64)
 DEFAULT_Q_ISAAC = np.array([DEFAULT_Q[n] for n in ISAACLAB_JOINT_NAMES], dtype=np.float64)
 
-# 观测/动作/时序常量 (params/env.yaml + 导出的 IO descriptor).
 ACTION_SCALE = 0.1
-ACTION_CLIP = 1.0          # clip(raw*scale, -1, 1)
-LAST_ACTION_CLIP = 100.0   # last_action 观测项的 clip
+ACTION_CLIP = 1.0
+LAST_ACTION_CLIP = 100.0
 HISTORY_LEN = 5
 ANG_VEL_SCALE = 0.2
 JOINT_VEL_SCALE = 0.05
-SINGLE_FRAME_DIM = 3 + 3 + NUM_JOINTS + NUM_JOINTS + NUM_JOINTS  # 102
-OBS_DIM = SINGLE_FRAME_DIM * HISTORY_LEN  # 510
-# 单帧内各项在 102 维向量里的切片 (term-major 展平时按此切片各取 5 帧).
+SINGLE_FRAME_DIM = 3 + 3 + NUM_JOINTS + NUM_JOINTS + NUM_JOINTS
+OBS_DIM = SINGLE_FRAME_DIM * HISTORY_LEN
 TERM_SLICES = [
-    (0, 3),                          # base_ang_vel
-    (3, 6),                          # projected_gravity
-    (6, 6 + NUM_JOINTS),             # joint_pos_rel
-    (6 + NUM_JOINTS, 6 + 2 * NUM_JOINTS),    # joint_vel_rel
-    (6 + 2 * NUM_JOINTS, 6 + 3 * NUM_JOINTS),  # last_action
+    (0, 3),
+    (3, 6),
+    (6, 6 + NUM_JOINTS),
+    (6 + NUM_JOINTS, 6 + 2 * NUM_JOINTS),
+    (6 + 2 * NUM_JOINTS, 6 + 3 * NUM_JOINTS),
 ]
 
 PHYSICS_DT = 1.0 / 200.0
 DECIMATION = 4
-CONTROL_DT = PHYSICS_DT * DECIMATION  # 1/50 s, 50 Hz
-SPAWN_HEIGHT = 0.75   # TAKS_T1_CFG init_state.pos[2]
-TARGET_HEIGHT = 0.68  # TAKS_T1_DEFAULT_TRUNK_HEIGHT (仅用于绘图参考)
-IMU_GYRO_SENSOR = "imu_gyro"  # MuJoCo 体坐标系陀螺仪传感器名
+CONTROL_DT = PHYSICS_DT * DECIMATION
+SPAWN_HEIGHT = 0.75
+TARGET_HEIGHT = 0.68
+IMU_GYRO_SENSOR = "imu_gyro"
 
 
 def _self_check():
     """对照导出值断言烘焙常量正确 (防止后续误改偏离训练策略)."""
-    # 顺序均为 ISAACLAB_JOINT_NAMES (32). 数值取自 IO descriptor / taks.py.
     ref_kp = [589.409607] * 3 + [
         112.434517, 112.434517, 4.936697, 219.499985, 219.499985, 112.434517, 112.434517,
         4.936697, 589.409607, 589.409607, 112.434517, 112.434517, 4.936697, 589.409607,
@@ -256,9 +241,6 @@ def _self_check():
 _self_check()
 
 
-# ---------------------------------------------------------------------------
-# 策略加载 (从训练 checkpoint 重建 actor MLP; 也支持 TorchScript .pt / .onnx)
-# ---------------------------------------------------------------------------
 class _ActorMLP(nn.Module):
     """rsl_rl ActorCritic 的 actor 部分: Linear/激活 堆叠 (无观测归一化)."""
 
@@ -304,7 +286,6 @@ def load_policy(path, device, activation="elu"):
 
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         ms = ckpt["model_state_dict"]
-        # 取出 actor.layers.{i}.weight, 推断结构.
         wkeys = sorted(
             [k for k in ms if k.startswith("actor.layers.") and k.endswith(".weight")],
             key=lambda k: int(k.split(".")[2]),
@@ -328,7 +309,6 @@ def load_policy(path, device, activation="elu"):
 
         return _run
 
-    # TorchScript
     model = torch.jit.load(path, map_location=device).eval()
     print(f"  已加载 TorchScript 策略: {path}")
 
@@ -340,25 +320,19 @@ def load_policy(path, device, activation="elu"):
     return _run
 
 
-# ---------------------------------------------------------------------------
-# MuJoCo <-> IsaacLab 索引映射 (运行时从模型读取, 对关节/执行器顺序完全鲁棒)
-# ---------------------------------------------------------------------------
 class RobotIndex:
     """缓存 IsaacLab 关节顺序到 MuJoCo qpos/qvel/ctrl 地址的映射."""
 
     def __init__(self, model):
         import mujoco
 
-        # 浮动基座 (free joint): qpos[0:7] = [x,y,z, qw,qx,qy,qz], qvel[0:6] = [v(world), ω(body)].
         free = [j for j in range(model.njnt) if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
         assert len(free) == 1, f"期望 1 个 free joint, 实际 {len(free)}"
-        self.root_qadr = int(model.jnt_qposadr[free[0]])  # 通常为 0
+        self.root_qadr = int(model.jnt_qposadr[free[0]])
 
-        # 每个 IsaacLab 关节 -> MuJoCo qpos/qvel(dof)/actuator 地址.
         self.qpos_idx = np.zeros(NUM_JOINTS, dtype=np.int32)
         self.qvel_idx = np.zeros(NUM_JOINTS, dtype=np.int32)
         self.ctrl_idx = np.zeros(NUM_JOINTS, dtype=np.int32)
-        # 关节 id -> 执行器 id (motor 直驱, gear=1).
         jnt_to_act = {}
         for a in range(model.nu):
             jnt_to_act[int(model.actuator_trnid[a, 0])] = a
@@ -370,12 +344,10 @@ class RobotIndex:
             assert jid in jnt_to_act, f"关节 {name!r} 没有对应执行器"
             self.ctrl_idx[i] = jnt_to_act[jid]
 
-        # IMU 角速度传感器 (体坐标系陀螺仪).
         sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, IMU_GYRO_SENSOR)
         assert sid >= 0, f"MuJoCo 模型缺少 {IMU_GYRO_SENSOR!r} 传感器"
         self.gyro_adr = int(model.sensor_adr[sid])
 
-        # 一致性自检: 映射必须覆盖全部 32 个铰接关节且一一对应.
         assert len(set(self.qpos_idx.tolist())) == NUM_JOINTS
         assert len(set(self.ctrl_idx.tolist())) == NUM_JOINTS
 
@@ -406,9 +378,6 @@ def align_dynamics_to_isaaclab(model, idx):
         model.actuator_ctrllimited[act] = 1
 
 
-# ---------------------------------------------------------------------------
-# 观测构建 (复现训练: raw -> (noise 关) -> clip -> scale, 然后压入历史)
-# ---------------------------------------------------------------------------
 def projected_gravity_b(root_quat_wxyz):
     """重力方向 [0,0,-1] 投影到体坐标系 (= IsaacLab projected_gravity)."""
     q_xyzw = root_quat_wxyz[[1, 2, 3, 0]]
@@ -420,7 +389,7 @@ def build_single_frame(idx, data, last_action_raw):
     """组装单帧 102 维观测 [ang_vel·0.2, proj_grav, q-q0, dq·0.05, last_action]."""
     q_isaac, dq_isaac = idx.read_joints(data)
     ang_vel = data.sensordata[idx.gyro_adr : idx.gyro_adr + 3].copy()
-    root_quat = data.qpos[idx.root_qadr + 3 : idx.root_qadr + 7].copy()  # [w,x,y,z]
+    root_quat = data.qpos[idx.root_qadr + 3 : idx.root_qadr + 7].copy()
     grav = projected_gravity_b(root_quat)
 
     frame = np.empty(SINGLE_FRAME_DIM, dtype=np.float64)
@@ -447,7 +416,6 @@ class ObsHistory:
 
     def push(self, frame):
         if self.buf is None:
-            # 首帧: 复制填满 (镜像 CircularBuffer 首次 push 填满所有槽).
             self.buf = np.tile(frame, (HISTORY_LEN, 1))
         else:
             self.buf = np.vstack([self.buf[1:], frame[None, :]])
@@ -456,18 +424,23 @@ class ObsHistory:
         return np.concatenate([self.buf[:, a:b].reshape(-1) for (a, b) in TERM_SLICES])
 
 
-# ---------------------------------------------------------------------------
-# 执行器: 逐关节 PD + effort 硬截断 (复现 ImplicitActuator; 无 DC 电机饱和包络)
-# ---------------------------------------------------------------------------
+def dcmotor_clip(tau, dq):
+    """DCMotor._clip_effort: 速度相关的力矩包络, 再叠加逐关节力矩上限."""
+    vel_at_lim = VLIM_ISAAC * (1.0 + EFFORT_ISAAC / SATURATION_EFFORT)
+    dq_c = np.clip(dq, -vel_at_lim, vel_at_lim)
+    top = SATURATION_EFFORT * (1.0 - dq_c / VLIM_ISAAC)
+    bot = SATURATION_EFFORT * (-1.0 - dq_c / VLIM_ISAAC)
+    max_eff = np.minimum(top, EFFORT_ISAAC)
+    min_eff = np.maximum(bot, -EFFORT_ISAAC)
+    return np.clip(tau, min_eff, max_eff)
+
+
 def pd_torque(target_q, q, dq):
-    """显式 PD (目标速度 0) + 逐关节力矩上限, 全部 IsaacLab 顺序."""
+    """显式 PD (目标速度 0) + DC 电机饱和, 全部 IsaacLab 顺序."""
     tau = KP_ISAAC * (target_q - q) + KD_ISAAC * (-dq)
-    return np.clip(tau, -EFFORT_ISAAC, EFFORT_ISAAC)
+    return dcmotor_clip(tau, dq)
 
 
-# ---------------------------------------------------------------------------
-# 初始姿态 + settle
-# ---------------------------------------------------------------------------
 _HALF_SQRT2 = 0.7071067811865476
 
 
@@ -480,21 +453,19 @@ def init_pose(model, data, idx, mode, settle_steps, fallen_height):
     if mode == "default":
         data.qpos[qadr : qadr + 3] = [0.0, 0.0, SPAWN_HEIGHT]
         data.qpos[qadr + 3 : qadr + 7] = [1.0, 0.0, 0.0, 0.0]
-    elif mode == "supine":  # 仰卧(背朝下): 绕体 y 轴 -90°
+    elif mode == "supine":
         data.qpos[qadr : qadr + 3] = [0.0, 0.0, fallen_height]
         data.qpos[qadr + 3 : qadr + 7] = [_HALF_SQRT2, 0.0, -_HALF_SQRT2, 0.0]
-    elif mode == "prone":   # 俯卧(脸朝下): 绕体 y 轴 +90°
+    elif mode == "prone":
         data.qpos[qadr : qadr + 3] = [0.0, 0.0, fallen_height]
         data.qpos[qadr + 3 : qadr + 7] = [_HALF_SQRT2, 0.0, _HALF_SQRT2, 0.0]
     else:
         raise ValueError(f"未知 init-state: {mode}")
 
-    # 关节置默认角.
     data.qpos[idx.qpos_idx] = DEFAULT_Q_ISAAC
     data.qvel[:] = 0.0
     mujoco.mj_forward(model, data)
 
-    # settle: 用 PD 保持默认角, 让机器人落到地面并衰减瞬态, 使首帧是稳定的(摔倒)姿态.
     if mode != "default":
         for _ in range(settle_steps):
             q, dq = idx.read_joints(data)
@@ -504,9 +475,6 @@ def init_pose(model, data, idx, mode, settle_steps, fallen_height):
     return data.qpos.copy(), data.qvel.copy()
 
 
-# ---------------------------------------------------------------------------
-# 主循环
-# ---------------------------------------------------------------------------
 class ViewerState:
     """passive viewer 的键盘状态 (空格暂停, R 复位)."""
 
@@ -515,10 +483,10 @@ class ViewerState:
         self.reset_requested = False
 
     def key_callback(self, keycode):
-        if keycode == 32:  # space
+        if keycode == 32:
             self.paused = not self.paused
             print(f"[viewer] {'暂停' if self.paused else '继续'}")
-        elif keycode in (82, 261):  # R / Delete
+        elif keycode in (82, 261):
             self.reset_requested = True
             print("[viewer] 请求复位")
 
@@ -563,10 +531,8 @@ def run(args):
 
     do_reset()
 
-    # 数据记录 (用于绘图).
     log = {"t": [], "target_q": [], "actual_q": [], "tau": [], "height": [], "grav_z": []}
 
-    # viewer.
     headless = args.no_viewer or "DISPLAY" not in os.environ
     vstate = ViewerState()
     viewer = None
@@ -588,7 +554,6 @@ def run(args):
     print("-" * 80)
     try:
         for step in range(num_control_steps):
-            # 暂停 (viewer 仍响应).
             while vstate.paused and viewer is not None and viewer.is_running():
                 viewer.sync()
                 time.sleep(0.02)
@@ -599,18 +564,15 @@ def run(args):
                 do_reset()
                 wall_start = time.time() - step * CONTROL_DT
 
-            # 观测 (用当前 q/dq + 上一动作), 推理.
             frame = build_single_frame(idx, data, last_action_raw)
             history.push(frame)
-            raw_action = policy(history.flatten())  # IsaacLab 顺序, raw
+            raw_action = policy(history.flatten())
             last_action_raw = raw_action
 
-            # 相对位置动作: target = q_now + clip(raw*0.1, -1, 1).
             q_now, _ = idx.read_joints(data)
             processed = np.clip(raw_action * ACTION_SCALE, -ACTION_CLIP, ACTION_CLIP)
             target_q = q_now + processed
 
-            # 物理步进 (PD 力矩在每个物理步重算, 目标在 decimation 内保持不变).
             tau_last = None
             for _ in range(DECIMATION):
                 q, dq = idx.read_joints(data)
@@ -619,7 +581,6 @@ def run(args):
                 mujoco.mj_step(model, data)
                 tau_last = tau
 
-            # 记录.
             q_after, _ = idx.read_joints(data)
             log["t"].append(step * CONTROL_DT)
             log["target_q"].append(target_q.copy())
@@ -628,7 +589,6 @@ def run(args):
             log["height"].append(float(data.qpos[idx.root_qadr + 2]))
             log["grav_z"].append(float(projected_gravity_b(data.qpos[idx.root_qadr + 3 : idx.root_qadr + 7])[2]))
 
-            # 渲染 + 实时节流.
             if viewer is not None:
                 if not viewer.is_running():
                     print("\nviewer 已关闭, 退出.")
@@ -671,7 +631,6 @@ def save_plots(log, out_dir):
     target_q = np.array(log["target_q"])
     actual_q = np.array(log["actual_q"])
 
-    # 关节: 命令 vs 实际.
     n_cols = 4
     n_rows = (NUM_JOINTS + n_cols - 1) // n_cols
     fig1, axes1 = plt.subplots(n_rows, n_cols, figsize=(16, 3 * n_rows), sharex=True)
@@ -690,7 +649,6 @@ def save_plots(log, out_dir):
     p1 = os.path.join(out_dir, "standup_taks_t1_joint_positions.png")
     fig1.savefig(p1, dpi=110)
 
-    # 站起进度: 根高度 + 直立度.
     fig2, axes2 = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
     axes2[0].plot(t, log["height"], label="root height")
     axes2[0].axhline(TARGET_HEIGHT, color="r", ls="--", label=f"target {TARGET_HEIGHT}")
