@@ -34,10 +34,20 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 1
 fi
 
+# ── GPU 可见性以"调用本脚本的 shell"为准 ──────────────────────────────────────
+# tmux 新会话继承的是 tmux 服务器的全局环境,不是当前 shell:若服务器曾被某次
+# 单卡训练(export CUDA_VISIBLE_DEVICES=0)带脏,多卡 DDP 的每个 rank 都只看得到
+# 1 块卡,直接 invalid device ordinal。这里显式设置/清除,杜绝隐式继承。
+if [ -n "${CUDA_VISIBLE_DEVICES+x}" ]; then
+  GPU_ENV="export CUDA_VISIBLE_DEVICES=$(printf '%q' "$CUDA_VISIBLE_DEVICES")"
+else
+  GPU_ENV="unset CUDA_VISIBLE_DEVICES"
+fi
+
 # 把训练命令安全拼成一段 shell(printf %q 保留引号),在新 tmux 会话里执行并同时 tee 到日志。
 # PYTHONUNBUFFERED=1 让日志实时刷新;结尾 read 让窗口在训练结束后保留,方便看尾部输出。
 NCCL_ENV="export NCCL_P2P_DISABLE=\${NCCL_P2P_DISABLE:-1} NCCL_IB_DISABLE=\${NCCL_IB_DISABLE:-1} TORCH_NCCL_ASYNC_ERROR_HANDLING=\${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1} TORCH_NCCL_DESYNC_DEBUG=\${TORCH_NCCL_DESYNC_DEBUG:-1} TORCH_NCCL_ENABLE_MONITORING=\${TORCH_NCCL_ENABLE_MONITORING:-1} TORCH_NCCL_TRACE_BUFFER_SIZE=\${TORCH_NCCL_TRACE_BUFFER_SIZE:-2000} TORCH_NCCL_DUMP_ON_TIMEOUT=\${TORCH_NCCL_DUMP_ON_TIMEOUT:-1} TORCH_NCCL_DEBUG_INFO_TEMP_FILE=\${TORCH_NCCL_DEBUG_INFO_TEMP_FILE:-/tmp/nccl_trace_} NCCL_DEBUG=\${NCCL_DEBUG:-WARN}"
-INNER="export PYTHONPATH=$(printf '%q' "$RSL_RL_DIR")\${PYTHONPATH:+:\$PYTHONPATH}; $NCCL_ENV; PYTHONUNBUFFERED=1 $(printf '%q ' "$@") 2>&1 | tee $(printf '%q' "$LOG"); echo; echo '==== 训练进程已退出,按回车关闭本窗口 ===='; read"
+INNER="$GPU_ENV; export PYTHONPATH=$(printf '%q' "$RSL_RL_DIR")\${PYTHONPATH:+:\$PYTHONPATH}; $NCCL_ENV; PYTHONUNBUFFERED=1 $(printf '%q ' "$@") 2>&1 | tee $(printf '%q' "$LOG"); echo; echo '==== 训练进程已退出,按回车关闭本窗口 ===='; read"
 tmux new-session -d -s "$SESSION" "bash -lc $(printf '%q' "$INNER")"
 
 echo "✅ 已在 tmux 会话 '$SESSION' 启动训练 —— 现在断开 SSH 也不会中断。"
