@@ -55,7 +55,7 @@ class SceneCfg(InteractiveSceneCfg):
         debug_vis=False,
     )
 
-    robot = taks_t1.SEMI_TAKS_T1_DELAYED_DC_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot = taks_t1.SEMI_TAKS_T1_DELAYED_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",

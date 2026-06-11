@@ -4,7 +4,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
-from agile.rl_env.mdp.actuators import DelayedDCMotorCfg
+from agile.rl_env.mdp.actuators import DelayedImplicitActuatorCfg
 
 _TAKS_T1_USD_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "taks", "Taks_T1.usd"
@@ -179,7 +179,7 @@ TAKS_T1_CFG = ArticulationCfg(
 )
 
 
-TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
+TAKS_T1_DELAYED_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_TAKS_T1_USD_PATH,
         activate_contact_sensors=True,
@@ -214,10 +214,9 @@ TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.99,
     actuators={
-        "all": DelayedDCMotorCfg(
+        "all": DelayedImplicitActuatorCfg(
             max_delay=MAX_DELAY_STEPS,
             min_delay=MIN_DELAY_STEPS,
-            saturation_effort=130.0,
             joint_names_expr=[".*"],
             stiffness={
                 ".*_hip_yaw_joint": 589.409607,
@@ -353,7 +352,7 @@ SEMI_TAKS_T1_CFG = ArticulationCfg(
     },
 )
 
-SEMI_TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
+SEMI_TAKS_T1_DELAYED_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_SEMI_TAKS_T1_USD_PATH,
         activate_contact_sensors=True,
@@ -380,10 +379,9 @@ SEMI_TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "all": DelayedDCMotorCfg(
+        "all": DelayedImplicitActuatorCfg(
             max_delay=MAX_DELAY_STEPS,
             min_delay=MIN_DELAY_STEPS,
-            saturation_effort=130.0,
             joint_names_expr=[".*"],
             stiffness={
                 "waist_.*": 100.0,
