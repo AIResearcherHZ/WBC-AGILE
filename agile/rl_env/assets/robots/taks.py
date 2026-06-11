@@ -179,7 +179,7 @@ TAKS_T1_CFG = ArticulationCfg(
 )
 
 
-TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
+TAKS_T1_DELAYED_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_TAKS_T1_USD_PATH,
         activate_contact_sensors=True,
@@ -352,7 +352,7 @@ SEMI_TAKS_T1_CFG = ArticulationCfg(
     },
 )
 
-SEMI_TAKS_T1_DELAYED_DC_CFG = ArticulationCfg(
+SEMI_TAKS_T1_DELAYED_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_SEMI_TAKS_T1_USD_PATH,
         activate_contact_sensors=True,

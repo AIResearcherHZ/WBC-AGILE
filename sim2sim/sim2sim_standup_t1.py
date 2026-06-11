@@ -1,34 +1,3 @@
-
-"""Booster T1 StandUp Sim2Sim (23 DOF) — 自包含 MuJoCo 部署/验证脚本。
-
-把 IsaacLab 训练的站起策略（任务 ``StandUp-T1-v0``，rsl_rl ``ActorCritic`` MLP）
-直接从训练 checkpoint 加载，在 MuJoCo 里复现，并 **逐字节** 还原训练时的观测/动作管线：
-
-  观测 (375 = 5 帧历史, **term-major**, 每项内部帧从旧到新, IsaacLab 关节顺序):
-      [ base_ang_vel ×0.2      (5×3 =15) ]   # 体坐标系角速度(陀螺仪)
-      [ projected_gravity      (5×3 =15) ]   # 重力方向投影到体坐标系
-      [ joint_pos_rel          (5×23=115) ]  # q - default_q
-      [ joint_vel_rel ×0.05    (5×23=115) ]
-      [ last_action (raw, clip±100) (5×23=115) ]
-  动作 (RelativeJointPositionAction): target = q_now + clip(raw·0.1, -1, 1)
-  执行器: 逐关节 PD(kp/kd) + DC 电机力矩-转速饱和包络 + 逐关节力矩上限
-  初始化: supine/prone 摔倒姿态 + settle, 用于触发站起策略
-
-与 ``agile/sim2mujoco/*`` 模块化路径相比, 本文件刻意做成单文件、把所有常量烘焙进来,
-便于维护; 关节顺序等 ground truth 由 ``scripts/export_IODescriptors.py`` 一次性导出后烘焙。
-
-用法::
-
-    python sim2sim/sim2sim_standup_t1.py \
-        --load_model logs/rsl_rl/stand_up_t1/<run>/model_9000.pt \
-        --mjcf agile/rl_env/assets/robot_menagerie/booster/t1/mujoco/scene.xml \
-        --init-state supine --duration 20.0
-
-    # 先验证站立保持(健全性检查), 再验证站起:
-    python sim2sim/sim2sim_standup_t1.py --load_model <ckpt> --init-state default
-    python sim2sim/sim2sim_standup_t1.py --load_model <ckpt> --init-state supine
-"""
-
 import argparse
 import os
 import re
@@ -68,7 +37,6 @@ NUM_JOINTS = len(ISAACLAB_JOINT_NAMES)
 
 
 def _by_regex(rules, names):
-    """按第一个匹配的正则给每个关节名赋值 (镜像 IsaacLab 的 actuator regex 配置)."""
     out = {}
     for n in names:
         for pat, val in rules:
@@ -154,7 +122,6 @@ TARGET_HEIGHT = 0.65
 
 
 def _self_check():
-    """对照导出值断言烘焙常量正确 (防止后续误改偏离训练策略)."""
     ref_kp = [20, 20, 20, 100, 20, 20, 20, 100, 100, 20, 20, 100, 100, 20, 20, 100, 100, 100, 100, 20, 20, 20, 20]
     ref_kd = [0.2, 0.5, 0.5, 2.5, 0.2, 0.5, 0.5, 2.5, 2.5, 0.5, 0.5, 2.5, 2.5, 0.5, 0.5, 2.5, 2.5, 2.5, 2.5, 1, 1, 1, 1]
     ref_q = [0, 0, 0, 0, 0, -1.3, 1.3, -0.2, -0.2, 0, 0, 0, 0, -0.3, 0.3, 0, 0, 0.4, 0.4, -0.2, -0.2, 0, 0]
@@ -171,7 +138,6 @@ _self_check()
 
 
 class _ActorMLP(nn.Module):
-    """rsl_rl ActorCritic 的 actor 部分: Linear/激活 堆叠 (无观测归一化)."""
 
     def __init__(self, in_dim, hidden_dims, out_dim, activation):
         super().__init__()
@@ -191,11 +157,6 @@ _ACTIVATIONS = {"elu": nn.ELU, "relu": nn.ReLU, "tanh": nn.Tanh, "selu": nn.SELU
 
 
 def load_policy(path, device, activation="elu"):
-    """返回一个可调用对象 obs(np[375]) -> action(np[23]).
-
-    优先把 ``path`` 当作 rsl_rl 训练 checkpoint (含 ``model_state_dict``) 重建 actor;
-    否则尝试 TorchScript; ``.onnx`` 用 onnxruntime.
-    """
     if str(path).endswith(".onnx"):
         import onnxruntime as ort
 
@@ -250,7 +211,6 @@ def load_policy(path, device, activation="elu"):
 
 
 class RobotIndex:
-    """缓存 IsaacLab 关节顺序到 MuJoCo qpos/qvel/ctrl 地址的映射."""
 
     def __init__(self, model):
         import mujoco
@@ -281,7 +241,6 @@ class RobotIndex:
         assert len(set(self.ctrl_idx.tolist())) == NUM_JOINTS
 
     def read_joints(self, data):
-        """返回 IsaacLab 顺序的 (q, dq)."""
         return data.qpos[self.qpos_idx].copy(), data.qvel[self.qvel_idx].copy()
 
     def write_torque(self, data, tau_isaac):
@@ -289,14 +248,12 @@ class RobotIndex:
 
 
 def projected_gravity_b(root_quat_wxyz):
-    """重力方向 [0,0,-1] 投影到体坐标系 (= IsaacLab projected_gravity)."""
     q_xyzw = root_quat_wxyz[[1, 2, 3, 0]]
     rot = R.from_quat(q_xyzw)
     return rot.apply(np.array([0.0, 0.0, -1.0]), inverse=True)
 
 
 def build_single_frame(idx, data, last_action_raw):
-    """组装单帧 75 维观测 [ang_vel·0.2, proj_grav, q-q0, dq·0.05, last_action]."""
     q_isaac, dq_isaac = idx.read_joints(data)
     ang_vel = data.sensordata[idx.gyro_adr : idx.gyro_adr + 3].copy()
     root_quat = data.qpos[idx.root_qadr + 3 : idx.root_qadr + 7].copy()
@@ -312,11 +269,6 @@ def build_single_frame(idx, data, last_action_raw):
 
 
 class ObsHistory:
-    """(HISTORY_LEN, 75) 环形历史, 索引 0 最旧, 末尾最新.
-
-    展平为 375 维 **term-major**: 依次拼接每一项的 5 帧 (帧从旧到新),
-    与 rsl_rl ``flatten_dict(cat([td[k].flatten(1) ...]))`` + IsaacLab CircularBuffer 一致.
-    """
 
     def __init__(self):
         self.buf = None
@@ -335,7 +287,6 @@ class ObsHistory:
 
 
 def dcmotor_clip(tau, dq):
-    """DCMotor._clip_effort: 速度相关的力矩包络, 再叠加逐关节力矩上限."""
     vel_at_lim = VLIM_ISAAC * (1.0 + EFFORT_ISAAC / SATURATION_EFFORT)
     dq_c = np.clip(dq, -vel_at_lim, vel_at_lim)
     top = SATURATION_EFFORT * (1.0 - dq_c / VLIM_ISAAC)
@@ -346,7 +297,6 @@ def dcmotor_clip(tau, dq):
 
 
 def pd_torque(target_q, q, dq):
-    """显式 PD (目标速度 0) + DC 电机饱和, 全部 IsaacLab 顺序."""
     tau = KP_ISAAC * (target_q - q) + KD_ISAAC * (-dq)
     return dcmotor_clip(tau, dq)
 
@@ -355,7 +305,6 @@ _HALF_SQRT2 = 0.7071067811865476
 
 
 def init_pose(model, data, idx, mode, settle_steps):
-    """设置初始姿态并 settle, 返回快照 (qpos, qvel) 供键盘复位用."""
     import mujoco
 
     mujoco.mj_resetData(model, data)
@@ -386,7 +335,6 @@ def init_pose(model, data, idx, mode, settle_steps):
 
 
 class ViewerState:
-    """passive viewer 的键盘状态 (空格暂停, R 复位)."""
 
     def __init__(self):
         self.paused = False
